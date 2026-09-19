@@ -1,0 +1,37 @@
+{
+  "name": "@asas/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASAS Challenge web - Angular participant phone, shared display and protected host dashboard",
+  "scripts": {
+    "start": "ng serve --host 0.0.0.0 --port 4200",
+    "build": "ng build",
+    "lint": "tsc -p tsconfig.app.json --noEmit"
+  },
+  "dependencies": {
+    "@angular/common": "^19.0.0",
+    "@angular/compiler": "^19.0.0",
+    "@angular/core": "^19.0.0",
+    "@angular/forms": "^19.0.0",
+    "@angular/platform-browser": "^19.0.0",
+    "@angular/router": "^19.0.0",
+    "@asas/shared": "*",
+    "d3-geo": "^3.1.1",
+    "qrcode": "^1.5.4",
+    "rxjs": "^7.8.1",
+    "socket.io-client": "^4.8.0",
+    "topojson-client": "^3.1.0",
+    "tslib": "^2.8.0",
+    "world-atlas": "^2.0.2",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^19.0.0",
+    "@angular/cli": "^19.0.0",
+    "@angular/compiler-cli": "^19.0.0",
+    "@types/d3-geo": "^3.1.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/topojson-client": "^3.1.5",
+    "typescript": "~5.6.3"
+  }
+}

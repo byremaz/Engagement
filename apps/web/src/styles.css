@@ -1,0 +1,415 @@
+/* ==========================================================================
+   ASAS Challenge - central Elm design tokens (spec §13.4).
+   All 15 source palette values come from colors.pdf page 1 (AC-26).
+   --game-go is a documented FUNCTIONAL extension, not an Elm brand colour.
+
+   Layout uses CSS LOGICAL properties (margin-inline, padding-inline,
+   inset-inline-*) so the whole UI mirrors for Arabic from `<html dir="rtl">`
+   alone. Game geometry (race lane, globe, ORDER sequence) is pinned back to
+   `direction: ltr` via `.ltr-geometry`, because mirroring it would change the
+   MEANING of the game, not just its layout.
+   ========================================================================== */
+:root {
+  --elm-navy: #051D49;
+  --elm-peach: #FFA168;
+  --elm-orange: #FF5D36;
+  --elm-lavender: #CC8BDB;
+  --elm-purple: #763CBC;
+  --elm-cyan: #00A1E0;
+  --elm-blue: #0071CE;
+  --elm-burgundy: #A12B2A;
+  --elm-deep-purple: #5A2C83;
+  --elm-royal-blue: #0032A0;
+  --elm-almost-white: #F7F8FC;
+  --elm-light-blue: #BDC9E9;
+  --elm-pale-blue: #E5E9F6;
+  --elm-dark-indigo: #2B2E65;
+  --elm-muted-indigo: #464D7E;
+
+  /* Functional extension, absent from the supplied Elm palette (§13.3). */
+  --game-go: #15803D;
+  --game-stop: var(--elm-burgundy);
+
+  --page-bg: var(--elm-almost-white);
+  --panel-bg: var(--elm-pale-blue);
+  --panel-selected-bg: var(--elm-light-blue);
+  --text-primary: var(--elm-navy);
+  --action-bg: var(--elm-blue);
+  --action-hover-bg: var(--elm-royal-blue);
+  --action-text: var(--elm-almost-white);
+  --stage-accent: var(--elm-purple);
+  --error-bg: var(--elm-burgundy);
+  --error-text: var(--elm-almost-white);
+  --dark-panel-bg: var(--elm-dark-indigo);
+  --dark-panel-bg-2: var(--elm-muted-indigo);
+
+  /* ---- typography -------------------------------------------------------
+     Official Elm fonts are NOT present in this workspace, so a system stack is
+     used and no substitute is presented as the official brand font. The Arabic
+     stack is appended for every family so mixed Arabic/Latin runs stay even. */
+  --font-latin: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-arabic: "SF Arabic", "Segoe UI", "Noto Naskh Arabic", "Noto Sans Arabic", "Geeza Pro", "Dubai", Tahoma;
+  --font-sans: var(--font-latin), var(--font-arabic);
+
+  /* Modular type scale (1.25). --fs-0 is the body size. */
+  --fs-000: 0.75rem;  /* 12px - captions, legal */
+  --fs-00: 0.875rem;  /* 14px - secondary text */
+  --fs-0: 1rem;       /* 16px - body */
+  --fs-1: 1.125rem;   /* 18px - lead / h3 */
+  --fs-2: 1.375rem;   /* 22px - h2 */
+  --fs-3: 1.75rem;    /* 28px - h1 */
+  --fs-4: 2.25rem;    /* 36px - stage headline */
+  --fs-5: 3rem;       /* 48px - display h2 */
+  --fs-6: 3.75rem;    /* 60px - display h1 */
+  --fs-7: 4.5rem;     /* 72px - display timer */
+  /* Alias used by shared components that predate the role scales below.
+     It was previously referenced with a fallback only, so the token never
+     actually resolved — defining it removes that silent inconsistency. */
+  --fs-xl: var(--fs-2);
+
+  /* ---- role-scoped type scale (plan §9, release criteria) ---------------
+     One universal scale cannot serve a phone held at arm's length, a host
+     laptop at a desk and a projector read from the back of a room. Each role
+     gets its own tokens, applied via .role-participant / .role-host /
+     .role-display, so "make the host readable" never shrinks the display.
+
+     Targets: participant body 16-18 / instruction 28-36 / outcome 32-40;
+     host operational 16 / active state 24-32 / actions 18;
+     display names+status 28-36 / signal 64-96 / timer 64-80. */
+  --role-body: var(--fs-0);
+  --role-instruction: var(--fs-3);
+  --role-outcome: var(--fs-4);
+  --role-action: var(--fs-1);
+
+  --lh-tight: 1.15;
+  --lh-body: 1.5;
+  --fw-regular: 400;
+  --fw-medium: 600;
+  --fw-bold: 700;
+  --fw-heavy: 800;
+
+  /* ---- spacing scale (4px base) ---------------------------------------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space: var(--space-2); /* legacy alias, still used by existing rules */
+
+  --radius-card: 12px;
+  --radius-btn: 10px;
+  --radius-pill: 999px;
+
+  /* ---- elevation -------------------------------------------------------- */
+  --elev-1: 0 1px 2px rgba(5, 29, 73, 0.08);
+  --elev-2: 0 2px 8px rgba(5, 29, 73, 0.12);
+  --elev-3: 0 8px 24px rgba(5, 29, 73, 0.18);
+  --elev-overlay: 0 16px 48px rgba(5, 29, 73, 0.32);
+
+  /* ---- focus ------------------------------------------------------------ */
+  --focus-ring-color: var(--elm-blue);
+  --focus-ring-color-dark: var(--elm-peach);
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--page-bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-0);
+  line-height: var(--lh-body);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Arabic runs slightly larger: the same pixel size reads smaller in Naskh. */
+html[lang="ar"] body { font-family: var(--font-arabic), var(--font-latin); font-size: 1.0625rem; line-height: 1.7; }
+
+app-root { display: block; min-height: 100%; }
+
+h1, h2, h3 { color: var(--text-primary); margin: 0 0 var(--space-2); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+h1 { font-size: var(--fs-3); }
+h2 { font-size: var(--fs-2); }
+h3 { font-size: var(--fs-1); }
+p { margin: 0 0 var(--space-2); }
+
+a { color: var(--elm-blue); text-decoration: underline; }
+a:hover { color: var(--elm-royal-blue); }
+
+/* ------------------------------------------------------- digits and bidi */
+/* One convention across both languages: Western Arabic digits 0-9, tabular. */
+.num, .timer, .score, table, time, code, .join-code {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+
+/* Names, join codes, timestamps, fractions and score fractions are isolated so
+   a mixed-script value (e.g. an English name in an Arabic sentence) cannot
+   scramble the surrounding line. `bdi` does this natively; the class covers
+   elements that cannot be a <bdi>. */
+bdi, .isolate { unicode-bidi: isolate; }
+.isolate-override { unicode-bidi: isolate-override; }
+/* Score fractions like 3/4 and codes must keep their internal order in RTL. */
+.join-code, .code, .fraction, .ltr-text { direction: ltr; unicode-bidi: isolate; }
+
+/* Game geometry stays physically LTR in both languages (plan §1). */
+.ltr-geometry { direction: ltr; }
+
+/* ---------------------------------------------------------------- buttons */
+.btn {
+  font: inherit;
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-0);
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 18px;
+  border-radius: var(--radius-btn);
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  transition: background-color 120ms ease, transform 80ms ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:focus-visible,
+a:focus-visible,
+.input:focus-visible,
+[tabindex]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.btn-primary { background: var(--action-bg); color: var(--action-text); }
+.btn-primary:hover:not(:disabled), .btn-primary:active:not(:disabled) { background: var(--action-hover-bg); }
+.btn-secondary { background: var(--panel-bg); color: var(--text-primary); border-color: var(--elm-navy); }
+.btn-secondary:hover:not(:disabled) { background: var(--panel-selected-bg); }
+.btn-stage { background: var(--stage-accent); color: var(--elm-almost-white); }
+.btn-stage:hover:not(:disabled) { background: var(--elm-deep-purple); }
+.btn-danger { background: var(--error-bg); color: var(--error-text); }
+.btn-danger:hover:not(:disabled) { background: #7d2120; }
+.btn-warm { background: var(--elm-peach); color: var(--elm-navy); }
+.btn-warm:hover:not(:disabled) { background: var(--elm-orange); }
+.btn:disabled { background: #d5d9e6; color: #5b6078; border-color: transparent; cursor: not-allowed; }
+.btn-lg { font-size: var(--fs-1); min-height: 56px; padding: 14px 24px; }
+.btn-block { width: 100%; }
+.btn-ghost { background: transparent; color: var(--text-primary); border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--panel-bg); }
+
+/* Segmented control (Manual / Auto, EN / ع). */
+.segmented { display: inline-flex; background: var(--panel-bg); border-radius: var(--radius-pill); padding: var(--space-1); gap: var(--space-1); }
+.segmented .btn { min-height: 36px; padding: 6px 14px; border-radius: var(--radius-pill); background: transparent; }
+.segmented .btn[aria-pressed='true'] { background: var(--action-bg); color: var(--action-text); }
+
+/* ------------------------------------------------------------------ panels */
+.card {
+  background: var(--panel-bg);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+.card-white { background: #fff; border: 1px solid var(--elm-light-blue); box-shadow: var(--elev-1); }
+.card-dark { background: var(--dark-panel-bg); color: var(--elm-almost-white); }
+.card-dark h1, .card-dark h2, .card-dark h3 { color: var(--elm-almost-white); }
+.card-dark .btn:focus-visible { outline-color: var(--focus-ring-color-dark); }
+.elev-1 { box-shadow: var(--elev-1); }
+.elev-2 { box-shadow: var(--elev-2); }
+.elev-3 { box-shadow: var(--elev-3); }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-00);
+  font-weight: var(--fw-medium);
+  line-height: 1.4;
+}
+.badge-stage { background: var(--stage-accent); color: var(--elm-almost-white); }
+.badge-warm { background: var(--elm-peach); color: var(--elm-navy); }
+.badge-lavender { background: var(--elm-lavender); color: var(--elm-navy); }
+.badge-neutral { background: var(--panel-selected-bg); color: var(--elm-navy); }
+.badge-go { background: var(--game-go); color: var(--elm-almost-white); }
+.badge-stop { background: var(--game-stop); color: var(--elm-almost-white); }
+
+.alert { padding: var(--space-3) var(--space-4); border-radius: var(--radius-card); font-weight: var(--fw-medium); }
+/* .alert-error is reserved for REAL failures (plan §2) - never for Auto mode. */
+.alert-error { background: var(--error-bg); color: var(--error-text); }
+.alert-warn { background: var(--elm-peach); color: var(--elm-navy); }
+.alert-info { background: var(--panel-selected-bg); color: var(--elm-navy); }
+
+/* ------------------------------------------------------------------- forms */
+.input {
+  font: inherit;
+  font-size: var(--fs-1);
+  min-height: 48px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-btn);
+  border: 2px solid var(--elm-light-blue);
+  background: #fff;
+  color: var(--text-primary);
+}
+.input:focus { outline: none; border-color: var(--elm-blue); box-shadow: 0 0 0 3px rgba(0, 113, 206, 0.25); }
+label { font-weight: var(--fw-medium); display: block; margin-bottom: var(--space-1); }
+
+/* ------------------------------------------------------------------ layout */
+.page {
+  min-height: 100dvh;
+  padding-block: calc(var(--space-4) + env(safe-area-inset-top)) calc(var(--space-4) + env(safe-area-inset-bottom));
+  padding-inline: calc(var(--space-4) + env(safe-area-inset-left)) calc(var(--space-4) + env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 560px;
+  margin-inline: auto;
+}
+.stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.spacer { flex: 1; }
+.muted { color: var(--elm-muted-indigo); }
+.center { text-align: center; }
+.small { font-size: var(--fs-00); }
+.tiny { font-size: var(--fs-000); }
+/* Logical text alignment: "start" follows the reading direction. */
+.text-start { text-align: start; }
+.text-end { text-align: end; }
+
+/* Signals: colour + icon + text, never colour alone (§13.7). */
+.signal {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3);
+  font-weight: var(--fw-heavy); letter-spacing: 0.04em; border-radius: var(--radius-card);
+}
+/* Arabic does not use letter-spacing: it breaks cursive joining. */
+html[lang="ar"] .signal { letter-spacing: normal; }
+.signal-green { background: var(--game-go); color: var(--elm-almost-white); }
+.signal-red { background: var(--game-stop); color: var(--elm-almost-white); }
+/* PAUSED is the dominant instruction wherever it appears (plan §3). */
+.signal-paused { background: var(--elm-dark-indigo); color: var(--elm-almost-white); }
+
+/* Countdown/timer typography (§13.6). */
+.timer { font-weight: var(--fw-heavy); font-variant-numeric: tabular-nums; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Hold button: no selection / context menu (§14). */
+.no-select { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+
+@keyframes pop { 0% { transform: scale(0.9); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes collapse-fade { 0% { transform: scale(1) rotate(0); opacity: 1; } 100% { transform: scale(0.3) rotate(25deg); opacity: 0.25; } }
+@keyframes confetti-fall { 0% { transform: translateY(-10vh) rotate(0); } 100% { transform: translateY(110vh) rotate(540deg); } }
+.pop { animation: pop 220ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}
+
+/* Large shared display (1920x1080) sizing (§13.6). */
+.display-root { font-size: var(--fs-3); }
+.display-root h1 { font-size: var(--fs-6); }
+.display-root h2 { font-size: var(--fs-5); }
+.display-root .timer { font-size: var(--fs-7); }
+.display-root table { font-size: var(--fs-3); }
+
+/* ==========================================================================
+   ROLE-SCOPED TYPE SCALE (plan section 9, release criteria)
+
+   Each role sizes text by its own viewing distance and task. Overcrowding is
+   solved by showing FEWER items, never by shrinking essential names - so the
+   lane/row caps live in the components and these sizes stay fixed.
+   ========================================================================== */
+
+/* ---- participant: phone at arm's length, 360x640 upward ---------------- */
+.role-participant {
+  --role-body: 17px;            /* 16-18px target */
+  --role-instruction: clamp(28px, 8vw, 36px);
+  --role-outcome: clamp(32px, 9vw, 40px);
+  --role-action: 18px;
+  font-size: var(--role-body);
+  line-height: var(--lh-body);
+}
+.role-participant .instruction { font-size: var(--role-instruction); line-height: var(--lh-tight); font-weight: var(--fw-heavy); }
+.role-participant .outcome-title { font-size: var(--role-outcome); line-height: var(--lh-tight); font-weight: var(--fw-heavy); }
+.role-participant .btn-lg { font-size: var(--role-action); min-height: 60px; }
+/* Main gameplay controls are larger than the 44px minimum. */
+.role-participant .hold, .role-participant .pad { min-height: 200px; }
+
+/* ---- host: laptop at a desk, must stay usable at 1366x768 -------------- */
+.role-host {
+  --role-body: 16px;
+  --role-instruction: clamp(24px, 2.2vw, 32px);
+  --role-action: 18px;
+  font-size: var(--role-body);
+}
+.role-host .stage-state { font-size: var(--role-instruction); line-height: var(--lh-tight); font-weight: var(--fw-heavy); }
+.role-host .btn { font-size: var(--role-action); }
+/* Secondary tools may shrink; the live decision area may not. */
+.role-host .secondary-tools { font-size: var(--fs-00); }
+
+/* ---- display: read from the back of the room -------------------------- */
+.role-display {
+  --role-body: clamp(28px, 2vw, 36px);   /* names + essential status */
+  --role-signal: clamp(64px, 6vw, 96px);
+  --role-timer: clamp(64px, 5vw, 80px);
+  font-size: var(--role-body);
+}
+.role-display .signal { font-size: var(--role-signal); line-height: 1.05; }
+.role-display .timer { font-size: var(--role-timer); }
+
+/* ==========================================================================
+   CONTRAST
+
+   Essential information is carried by Navy-on-light text, never by a pale
+   label or a tiny coloured mark alone. `.muted` is for genuinely secondary
+   copy; these overrides stop it being used for anything load-bearing.
+   ========================================================================== */
+.essential { color: var(--text-primary); font-weight: var(--fw-bold); }
+/* On the dark display/arena surfaces, "muted" must still clear AA. */
+.card-dark .muted, .role-display .muted { color: var(--elm-light-blue); }
+/* ASAS attribution and technical footers stay secondary to player state. */
+.attribution { font-size: var(--fs-000); color: var(--elm-muted-indigo); font-weight: var(--fw-regular); }
+
+/* ==========================================================================
+   VIEWPORT VERIFICATION TARGETS
+
+   Checked at 360x640 phone, 1366x768 host and 1920x1080 display, plus browser
+   zoom and OS larger-text. Natural scrolling is allowed on phone and host
+   SECONDARY content; the display's normal presentation must fit its viewport.
+   ========================================================================== */
+
+/* 360x640: the narrowest supported phone. Keep the primary action reachable
+   and never introduce horizontal overflow in either language. */
+@media (max-width: 380px) {
+  .role-participant { --role-body: 16px; }
+  .page { padding-inline: calc(var(--space-3) + env(safe-area-inset-left)) calc(var(--space-3) + env(safe-area-inset-right)); }
+}
+
+/* Short viewport (360x640 with browser chrome, or landscape phone): trim the
+   pad rather than the instruction, so the words stay legible. */
+@media (max-height: 680px) {
+  .role-participant .hold, .role-participant .pad { min-height: 150px; }
+}
+
+/* 1366x768 host: the live decision area keeps its size; only the chrome
+   tightens. Solving crowding by shrinking the dashboard is explicitly out. */
+@media (max-width: 1400px) and (min-width: 900px) {
+  .role-host { --role-instruction: clamp(24px, 2vw, 28px); }
+}
+
+/* No horizontal overflow in either direction, in either language. */
+html, body { overflow-x: hidden; }
+
+/* Larger-text / zoom: allow secondary content to scroll instead of clipping
+   the primary action off-screen. */
+@media (max-height: 560px) {
+  .page { min-height: auto; }
+}
