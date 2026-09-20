@@ -224,7 +224,9 @@ export const ORDER_QUESTIONS: OrderContent[] = [
   q('SORT-06', 'Order these distances from shortest to longest.', SHORT_LONG, ['100 metres', 'Half a kilometre', '750 metres', 'One kilometre'], '100, 500, 750, 1000 metres.', 'Medium'),
   q('SORT-07', 'Put these letters in English alphabetical order.', 'A–Z: first letter at the top', ['B', 'G', 'S', 'W'], 'B comes before G, then S, then W.', 'Easy-medium'),
   q('SORT-08', 'Order these planets from nearest to farthest from the Sun.', 'Nearest to the Sun at the top → Farthest at the bottom', ['Earth', 'Mars', 'Jupiter', 'Neptune'], 'The 3rd, 4th, 5th and 8th planets from the Sun.', 'Medium'),
-  q('SORT-09', 'Order these masses from lightest to heaviest.', 'Lightest at the top → Heaviest at the bottom', ['250 grams', 'Half a kilogram', '750 grams', 'One kilogram'], '250, 500, 750, 1000 grams.', 'Medium'),
+  // SORT-09 was structurally identical to SORT-06 (four metric magnitudes); a
+  // non-numeric sequence keeps the round bank varied (plan v2 §2, P2-7).
+  q('SORT-09', "Order the stages of a butterfly's life, earliest first.", EARLIEST, ['Egg', 'Caterpillar', 'Chrysalis', 'Butterfly'], 'Egg, caterpillar, chrysalis, then butterfly.', 'Easy-medium'),
   q('SORT-10', 'Order these durations from shortest to longest.', SHORT_LONG, ['45 seconds', 'One minute', '90 seconds', 'Two minutes'], '45, 60, 90, 120 seconds.', 'Medium'),
 ];
 

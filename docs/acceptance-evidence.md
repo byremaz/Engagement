@@ -22,6 +22,32 @@ the venue rehearsal (AC-02, AC-16, AC-24, AC-25).
 | AC-21 | `transitions-and-device.test.ts` "Host transitions" - timers only reach `InputLocked`; START/REVEAL/NEXT require host actions. |
 | AC-22 | `transitions-and-device.test.ts` "Auto signal schedule" + race engine: mode change never resets tolerance or revives players. |
 
+## Redesign v2 evidence (docs/redesign-plan-v2.md, 20 Sep 2026)
+
+Scoring rule version `2.0.0` supersedes the AC-05 / AC-07 / AC-08 formulas above for sessions created
+after this date; earlier sessions keep `1.2.0` (`scoringRules()` selects by the frozen version).
+
+| Plan item | Evidence |
+|---|---|
+| §9 A — race outcomes persisted for every attempt, early close on "all done" | `apps/api/test/rounds-service.test.ts` "Race outcomes survive across attempts": practice then scored race → `writeRaceOutcome` rows for the scored race (0 before the fix); tick closes the round with the CURRENT attempt id. |
+| §9 B — no stale race state in globe/order rounds | `rounds-service.test.ts` "myState() reads the race engine only for a race attempt". |
+| §9 D — tie-break rotation and void | `rounds-service.test.ts` "Tie-breaks": TIE-01 → void → TIE-02, `tie_break` cleared. |
+| §9 E/H — a round is never counted twice | `rounds-service.test.ts` "A scored round is never counted twice": `START_GAME` after a scored reveal is rejected; `gameRawTotals` sums the latest attempt only. `transitions-and-device.test.ts` "final results never skip the last game results". |
+| §9 I — restart recovery | `rounds-service.test.ts` "Restart recovery": live race voided + replayed to `Ready`; live globe round paused. Observed live on 20 Sep: three stale sessions recovered on boot (`RECOVER_RESTART` audit rows). |
+| §9 J — race ticks do no DB work | `rounds-service.test.ts` "Race ticks are cheap": query count unchanged over 6 ticks, ≥3 `race` events. |
+| §7 scoring v2 | `packages/shared/test/scoring.test.ts` "Scoring v2": every worked example of plan §7 (100 / 93.3 / 86.7 / 80 / 54 / 30 / 0; 97.6 / 92 / 84 / 80 / 78 / 70 / 60 / 40 / 0; 97 / 92 / 85 / 80 / 40 / 0; game totals 433 / 933 / 755 / 638); v1 still 25 per card and N-based. |
+| §7.5 active time | `packages/shared/test/timing.test.ts`: pause + resume (with its 3 s countdown) excluded; agrees with the pause-record oracle across two pauses. |
+| §8 podium order | `packages/shared/test/podium.test.ts`: 3 → 3+2 → 3+2+1; ties as bands; three tied for first reveal only at step 3. |
+| §9 E tolerance | `apps/api/test/race-engine.test.ts` "RaceEngine v2 inputs": 700 ms default, per-session tolerance honoured, active finish time excludes a pause. |
+| Design tokens | `npm run lint:tokens -w apps/web` — every `var(--…)` in `apps/web/src` is defined in `styles.css` (100 tokens). |
+| Headless rehearsal | `docs/rehearsal-race-auto.sh` (AUTO signals, 20 bots, 3 races) and `docs/rehearsal-walkthrough.sh` (all three games, podium steps, ceremony, `rounds.csv` with Time/Base/Speed) — results recorded below. |
+
+### Manual checks still open for v2 (need real devices)
+
+M1–M14 in `docs/redesign-plan-v2.md` §11.3: elimination takeover + vibration on iPhone/Android, 700 ms
+fairness, globe touch/pinch, ORDER drag on iOS Safari, Arabic rendering with the self-hosted font,
+reconnect mid-round, display audio/fullscreen from the back of the room, p95 latency with 100 bots.
+
 ## Corrective contract verification (plan §9.9, 15 Sep 2026)
 
 ### To-do 21 — participant join URL vs authenticated host (source-verified)

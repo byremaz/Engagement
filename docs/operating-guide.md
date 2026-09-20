@@ -119,6 +119,9 @@ Rules that matter live:
 | A phone reloads or drops | Identity, score, locked answer and life state are restored by the server. A reload never creates a second player and never revives an eliminated one (AC-11, AC-23). |
 | A participant switches to another phone | They enter their recovery code. The new device becomes the single active controller; the old one is disconnected. Device history is retained (§5.1 item 8). |
 | Display drops | Reopen **Open display link** and click the overlay once to re-enable audio. Old sounds do not replay after recovery (AC-24). |
+| After each game | **Show game results** opens the podium: press **Reveal 3rd place → Reveal 2nd place → Reveal the champion → Show full table** (the primary button walks these steps). A tie shows one band with everyone tied; a step with nobody to reveal is greyed out. |
+| Display language | In the **Room** card choose the shared display's language and the default language for new phones; each phone can still switch its own language. |
+| Server restarted mid-round | The API recovers on boot: a live race is voided and prepared again (press **Start round**); a live globe/order round is paused (press **Resume**). |
 | Tie for the top three | The **Ceremony** panel offers an Order It! tie-break for exactly the tied players. |
 
 Disconnection alone never eliminates a racer; a hold with no heartbeat is treated as released (AC-04).
@@ -133,7 +136,11 @@ Disconnection alone never eliminates a racer; a hold with no heartbeat is treate
 3. Check the CSV rankings match the ceremony table, including names in non-Latin scripts (AC-14).
 4. **Close session…** (double confirmation). Joining and play end; results are kept in the database.
 
-Scoring reference: each game is worth up to 1,000 points, tournament total up to 3,000. All scoring runs
+Scoring reference (v2, rule version 2.0.0): every round = up to 80 for the achievement + up to 20 for speed
+(speed only with a full achievement and a manual lock). Race: finish 80 + speed relative to the first finisher
+(15 s window), alive at the end 60 × progress, eliminated 0. Globe: inside 80 + speed, outside 80 − 10 per
+500 km. Order: 20 per correct card, all four + a fast lock adds speed. The red-signal tolerance is 700 ms.
+Each game is worth up to 1,000 points, tournament total up to 3,000. All scoring runs
 on the server from frozen rules (`SCORING_RULE_VERSION` in the session snapshot); clients never send
 scores. Practice never contributes points (AC-03).
 

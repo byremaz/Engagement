@@ -5,6 +5,15 @@
 **Language:** English throughout the specification and website  
 **Visual identity:** Elm, using the supplied `colors.pdf`, page 1
 
+> **Revision v2 (20 Sep 2026, `docs/redesign-plan-v2.md`):** this document remains the functional foundation; the rules below were superseded by the approved redesign plan and are implemented under scoring rule version `2.0.0` (frozen per session; earlier sessions keep `1.2.0`):
+> - §6.4 red synchronization tolerance **200 ms → 700 ms** (human reaction + venue latency); §6.7 minimum Auto green **36 s → 48 s** (60 %).
+> - §6.8 race scoring: finished = `80 + 20 · max(0, 1 − (t − t_first) / 15 s)` (100 ms buckets, independent of N); alive at timeout = `60 · p`; eliminated = 0.
+> - §7.5 geo scoring: inside = `80 + 20 · max(0, 1 − t_lock / 25 s)` (manual lock only); outside = `max(0, 80 − d / 50)`; no pin = 0.
+> - §8.5 ordering: **20** per correct position (0/20/40/80); a perfect, manually locked order adds `20 · max(0, 1 − t_lock / 20 s)`.
+> - §9.2: a per-game podium (3rd → 2nd → champion → table) precedes the game standings; the final ceremony keeps its four steps.
+> - §2/§13 language rows: full Arabic and English (see `ASAS-UX-Enhancement-Prompt.md`), with a host-controlled display language.
+> Time-to-lock is measured on the API clock as `duration − (deadline − now)` at the manual lock, so pauses never inflate it.
+
 ## 1. Purpose and intended outcome
 
 Build a working, real-time website for a 30-minute employee engagement event. More than 50 people will participate individually from their phones while sitting in one room facing a large shared screen. One host controls the event. Participants keep the same identity across three games, and their combined scores determine the event winners.

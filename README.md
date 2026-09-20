@@ -8,9 +8,11 @@ Games, in event order:
 
 1. **Red Light, Green Light** - hold to move on GREEN; moving on RED eliminates you for the current race only.
 2. **Pin the Country** - rotate the globe and drop a pin inside the named country; distance decides the score.
-3. **Order It!** - arrange four cards in the requested order; each correct position earns 25 points.
+3. **Order It!** - arrange four cards in the requested order; each correct position earns 20 points, and a perfect fast lock adds a speed bonus.
 
 Each game is worth up to 1,000 points (tournament total 3,000). All scoring runs on the server.
+
+**Scoring v2 (rule version `2.0.0`, see `docs/redesign-plan-v2.md` §7):** every round is worth 100 — up to **80 for the achievement** (finish / inside the country / 4 of 4) plus up to **20 for speed**. Speed counts only with the full achievement and a manual lock, so a fast wrong answer never beats a slow right one. Eliminated in a race = 0 for that race. Sessions created before v2 keep their frozen `1.2.0` rules.
 
 ## Repository layout
 
