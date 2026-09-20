@@ -2,9 +2,9 @@
  * Host REST endpoints under /v1/sessions/:id (kebab-case, plural nouns):
  * actions, snapshot and CSV exports (§4.1, §12.2). All guarded by the host key.
  */
-import { Body, Controller, Get, Header, HttpCode, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { IsArray, IsIn, IsInt, IsOptional, IsString, Length, Max, Min } from 'class-validator';
-import type { HostAction, StandingRow } from '@asas/shared';
+import type { HostAction, Lang, StandingRow } from '@asas/shared';
 import { HostGuard } from '../sessions/host.guard';
 import { SessionsService } from '../sessions/sessions.service';
 import { RaceController } from './race.controller';
@@ -16,7 +16,7 @@ const ACTIONS: HostAction[] = [
   'SHOW_INSTRUCTIONS', 'START_PRACTICE', 'REVEAL_PRACTICE', 'START_GAME', 'START_ROUND', 'PAUSE', 'RESUME',
   'REVEAL_RESULTS', 'NEXT_ROUND', 'SHOW_GAME_RESULTS', 'NEXT_GAME', 'SHOW_FINAL_RESULTS', 'VOID_ROUND',
   'START_TIEBREAK', 'CEREMONY_STEP', 'CLOSE_SESSION',
-  'STANDINGS_PAGE',
+  'STANDINGS_PAGE', 'PODIUM_STEP',
 ];
 
 export class HostActionDto {
@@ -29,6 +29,11 @@ export class HostActionDto {
 
 export class SignalDto {
   @IsIn(['RED', 'GREEN']) color!: 'RED' | 'GREEN';
+}
+
+export class LanguagesDto {
+  @IsOptional() @IsIn(['en', 'ar']) displayLang?: Lang;
+  @IsOptional() @IsIn(['en', 'ar']) defaultParticipantLang?: Lang;
 }
 
 export class ExportQueryDto {
@@ -74,6 +79,30 @@ export class HostActionsController {
   async signal(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SignalDto) {
     await this.race.hostSignal(id, dto.color);
   }
+
+  /** Host-controlled shared-display language and default language for new phones. */
+  @Patch('languages')
+  languages(@Param('id', ParseUUIDPipe) id: string, @Body() dto: LanguagesDto) {
+    return this.rounds.setLanguages(id, { displayLang: dto.displayLang, defaultParticipantLang: dto.defaultParticipantLang });
+  }
+}
+
+/** Compact per-row scoring detail for the rounds export, e.g. `state=finished;rank=2`. */
+function detailSummary(game: string, d: Record<string, unknown> | null): string {
+  if (!d) return '';
+  const parts: string[] = [];
+  if (game === 'RLGL') {
+    if (d['state'] !== undefined) parts.push(`state=${String(d['state'])}`);
+    if (d['rank'] !== undefined && d['rank'] !== null) parts.push(`rank=${String(d['rank'])}`);
+    if (typeof d['progress'] === 'number') parts.push(`progress=${Math.round(d['progress'] as number)}`);
+  } else if (game === 'GEO') {
+    parts.push(`distance=${d['distanceKm'] === null || d['distanceKm'] === undefined ? '' : Math.round(Number(d['distanceKm']))}`);
+    parts.push(`inside=${d['inside'] === true ? 'yes' : 'no'}`);
+  } else {
+    if (d['correctPositions'] !== undefined) parts.push(`correct=${String(d['correctPositions'])}`);
+    parts.push(`locked=${d['lockedManually'] === true ? 'yes' : 'no'}`);
+  }
+  return parts.join(';');
 }
 
 @Controller('sessions/:id/exports')
@@ -117,11 +146,13 @@ export class ExportsController {
     const rows = await this.repo.attemptsForExport(id);
     await this.sessions.audit(id, 'EXPORT_ROUNDS', {});
     return csv([
-      ['Attempt ID', 'Game', 'Round', 'Attempt No', 'Practice', 'Tie-break', 'Voided', 'Void Reason', 'Content ID', 'Participant ID', 'Number', 'Name', 'Locked At', 'Raw Score'],
+      ['Attempt ID', 'Game', 'Round', 'Attempt No', 'Practice', 'Tie-break', 'Voided', 'Void Reason', 'Content ID', 'Participant ID', 'Number', 'Name', 'Locked At', 'Raw Score', 'Time (ms)', 'Base', 'Speed', 'Detail', 'Rule Version'],
       ...rows.map((r) => [
-        r.id, r.game_type, r.round_index + 1, r.attempt_no, r.is_practice ? 'yes' : 'no', r.is_tiebreak ? 'yes' : 'no',
+        r.id, r.game_type, r.is_tiebreak ? 'tie-break' : r.round_index + 1, r.attempt_no, r.is_practice ? 'yes' : 'no', r.is_tiebreak ? 'yes' : 'no',
         r.voided_at ? 'yes' : 'no', r.void_reason, r.content_id, r.participant_id, r.number, r.name,
         r.locked_at ? r.locked_at.toISOString() : '', r.raw_score,
+        r.time_ms ?? '', typeof r.detail?.['base'] === 'number' ? (r.detail['base'] as number) : '', typeof r.detail?.['speed'] === 'number' ? (r.detail['speed'] as number) : '',
+        detailSummary(r.game_type, r.detail), r.scoring_rule_version ?? '',
       ]),
     ]);
   }

@@ -20,6 +20,8 @@ export interface RacePlayer {
   holdSince: number | null;
   lastHeartbeat: number | null;
   finishedAt: number | null;
+  /** Active (unpaused) ms from race start to the finish line — the v2 speed input. */
+  finishActiveMs: number | null;
   death: { at: number; reason: string; signalEventId: number } | null;
 }
 
@@ -44,8 +46,16 @@ export class RaceEngine {
   private nextElimId = 1;
   private paused = false;
   private lastTick: number;
+  /** Unpaused ms elapsed since the engine started; pauses never inflate a finisher's time. */
+  private activeMs = 0;
 
-  constructor(participantIds: string[], now: number, readonly speed = RLGL_SPEED_UNITS_PER_SEC) {
+  constructor(
+    participantIds: string[],
+    now: number,
+    readonly speed = RLGL_SPEED_UNITS_PER_SEC,
+    /** Frozen per session content so an older session keeps its own tolerance. */
+    readonly redToleranceMs = RLGL_RED_TOLERANCE_MS,
+  ) {
     for (const id of participantIds) {
       this.players.set(id, {
         participantId: id,
@@ -55,6 +65,7 @@ export class RaceEngine {
         holdSince: null,
         lastHeartbeat: null,
         finishedAt: null,
+        finishActiveMs: null,
         death: null,
       });
     }
@@ -103,7 +114,7 @@ export class RaceEngine {
     }
     p.lastHeartbeat = now;
     if (sig.color === 'RED') {
-      const inTolerance = now - sig.effectiveAt < RLGL_RED_TOLERANCE_MS;
+      const inTolerance = now - sig.effectiveAt < this.redToleranceMs;
       const newPress = !p.holding;
       // New press during established red, or continuing hold after the shared tolerance → eliminated (§6.4).
       if (newPress && now >= sig.effectiveAt && !inTolerance) return this.eliminate([p], now, 'new press on red');
@@ -127,6 +138,7 @@ export class RaceEngine {
    */
   tick(now: number): EliminationEvent | null {
     if (this.paused || now <= this.lastTick) return null;
+    this.activeMs += now - this.lastTick;
     const sig = this.signal;
     const victims: RacePlayer[] = [];
     for (const p of this.players.values()) {
@@ -137,7 +149,7 @@ export class RaceEngine {
         continue;
       }
       if (sig.color === 'RED') {
-        if (now - sig.effectiveAt >= RLGL_RED_TOLERANCE_MS) victims.push(p);
+        if (now - sig.effectiveAt >= this.redToleranceMs) victims.push(p);
         continue;
       }
       const from = Math.max(this.lastTick, p.holdSince ?? this.lastTick, sig.effectiveAt);
@@ -146,6 +158,7 @@ export class RaceEngine {
       if (p.progress >= RLGL_TRACK_LENGTH) {
         p.state = 'finished';
         p.finishedAt = now;
+        p.finishActiveMs = this.activeMs;
         p.holding = false;
       }
     }

@@ -99,6 +99,14 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS current_attempt_id uuid;          
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS seq bigint NOT NULL DEFAULT 0;                             -- snapshot sequence (§12.4)
 ALTER TABLE participants ADD COLUMN IF NOT EXISTS tie_break numeric(12,4);                              -- §9.3 ordering value; null = none
 
+-- Redesign v2 (docs/redesign-plan-v2.md): per-game podium, host-controlled display language,
+-- speed scoring inputs and the scoring version frozen per attempt.
+ALTER TABLE sessions       ADD COLUMN IF NOT EXISTS podium_step              integer NOT NULL DEFAULT 0;   -- GameResults podium (0 none … 4 table)
+ALTER TABLE sessions       ADD COLUMN IF NOT EXISTS display_lang             text NOT NULL DEFAULT 'en';  -- shared display language ('en'|'ar')
+ALTER TABLE sessions       ADD COLUMN IF NOT EXISTS default_participant_lang text NOT NULL DEFAULT 'en';  -- default for new phones
+ALTER TABLE answers        ADD COLUMN IF NOT EXISTS time_ms                  integer;                     -- active ms to MANUAL lock (API clock); null = never locked
+ALTER TABLE round_attempts ADD COLUMN IF NOT EXISTS scoring_rule_version     text;                        -- copy of the session's frozen version
+
 CREATE INDEX IF NOT EXISTS round_attempts_session_idx ON round_attempts(session_id, game_type, round_index);
 CREATE INDEX IF NOT EXISTS answers_participant_idx ON answers(participant_id);
 

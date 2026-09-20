@@ -4,7 +4,7 @@
  * Guarantees at least RLGL_AUTO_MIN_GREEN_MS of total green over a full race.
  */
 import type { RaceContent } from '@asas/shared';
-import { RLGL_AUTO_MIN_GREEN_MS } from '@asas/shared';
+import { RLGL_AUTO_MIN_GREEN_FRACTION, RLGL_AUTO_MIN_GREEN_MS } from '@asas/shared';
 
 export interface ScheduledSignal {
   color: 'RED' | 'GREEN';
@@ -28,7 +28,7 @@ function pick(r: () => number, [lo, hi]: [number, number]): number {
 
 /** Builds alternating GREEN/RED segments covering `totalMs`, starting with GREEN. */
 export function buildAutoSchedule(content: RaceContent, totalMs: number, seed: number): ScheduledSignal[] {
-  const minGreen = Math.min(RLGL_AUTO_MIN_GREEN_MS, Math.floor(totalMs * 0.45));
+  const minGreen = Math.min(RLGL_AUTO_MIN_GREEN_MS, Math.floor(totalMs * RLGL_AUTO_MIN_GREEN_FRACTION));
   for (let attempt = 0; attempt < 32; attempt++) {
     const r = rng(seed + attempt * 7919);
     const out: ScheduledSignal[] = [];

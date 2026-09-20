@@ -2,22 +2,26 @@
  * Stage engine: executes host actions (§4.5), owns timers (§11) and publishes
  * each round's score exactly once (§12.9). Timers only close input.
  */
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import type { GameType, HostAction, HostActionPayload, SessionSnapshot, SessionState } from '@asas/shared';
-import { GAME_ORDER, tieBreakValues, type OrderContent } from '@asas/shared';
+import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import type { GameType, HostAction, HostActionPayload, Lang, SessionSnapshot, SessionState } from '@asas/shared';
+import { GAME_ORDER, SCORING_RULE_VERSION_V1, scoringRules, tieBreakValues, type OrderContent } from '@asas/shared';
 import { DbService } from '../db/db.service';
 import { SessionsService, type SessionRow } from '../sessions/sessions.service';
 import { RaceController } from './race.controller';
 import { RoundRepo, type AttemptRow } from './round-repo';
-import { scoreGeoRound, scoreOrderRound, scoreRaceRound, type RoundScoreResult } from './round-scoring';
+import { scoreGeoRound, scoreOrderRound, scoreRaceRound, type RoundScoreResult, type RoundScoringContext } from './round-scoring';
 import { RoundsEventBus } from './rounds.events';
 import { buildSnapshot, gameTypeAt, roundCountFor } from './snapshot';
 import { StandingsService } from './standings.service';
 import { COUNTDOWN_MS, canTransition } from './transitions';
 import { LiveRuntime } from './live-runtime';
 
+type SessionPatch = Partial<Pick<SessionRow,
+  'state' | 'paused' | 'game_index' | 'round_index' | 'ceremony_step' | 'standings_page' | 'current_attempt_id'
+  | 'podium_step' | 'display_lang' | 'default_participant_lang'>>;
+
 @Injectable()
-export class RoundsService {
+export class RoundsService implements OnApplicationBootstrap {
   private readonly log = new Logger(RoundsService.name);
   private readonly locks = new Map<string, Promise<unknown>>();
 
@@ -57,6 +61,7 @@ export class RoundsService {
     switch (action) {
       case 'SHOW_INSTRUCTIONS': {
         const gi = s.state === 'Lobby' ? 0 : s.game_index;
+        this.live.clear(s.id);
         await this.update(s.id, { state: 'Instructions', game_index: gi, round_index: -1, current_attempt_id: null });
         await this.db.query('UPDATE participants SET ready = false WHERE session_id = $1', [s.id]);
         if (!s.event_started_at) await this.db.query('UPDATE sessions SET event_started_at = now(), content_frozen = true WHERE id = $1', [s.id]);
@@ -68,8 +73,14 @@ export class RoundsService {
         return;
       }
       case 'START_GAME': {
+        // From Reveal only after the practice reveal; a scored round in Reveal must
+        // continue with NEXT_ROUND / SHOW_GAME_RESULTS, or the round would count twice.
+        if (s.state === 'Reveal' && attempt && !attempt.is_practice) {
+          throw new BadRequestException('START_GAME is not allowed after a scored round; use NEXT_ROUND or SHOW_GAME_RESULTS');
+        }
         const a = await this.prepare(s, gameTypeAt(s.game_index)!, 0, false);
         await this.update(s.id, { state: 'Ready', round_index: 0, current_attempt_id: a.id });
+        this.bus.emit('attempt', s.id, a.id, 'ready');
         return;
       }
       case 'START_ROUND':
@@ -77,7 +88,7 @@ export class RoundsService {
         await this.begin(s, attempt);
         return;
       case 'PAUSE': {
-        if (!attempt) return;
+        if (!attempt) throw new BadRequestException('no active round');
         const remaining = Math.max(0, (attempt.deadline_at?.getTime() ?? Date.now()) - Date.now());
         this.live.cancelTimers(s.id);
         this.race.onPause(s.id);
@@ -86,13 +97,14 @@ export class RoundsService {
         return;
       }
       case 'RESUME': {
-        if (!attempt) return;
+        if (!attempt) throw new BadRequestException('no active round');
         const now = Date.now();
         const countdownEnds = new Date(now + COUNTDOWN_MS);
         const deadline = new Date(now + COUNTDOWN_MS + (attempt.paused_remaining_ms ?? attempt.duration_ms));
         await this.repo.resume(attempt.id, countdownEnds, deadline);
         await this.update(s.id, { paused: false, state: 'Countdown' });
         this.armTimers(s.id, attempt.id, countdownEnds.getTime(), deadline.getTime(), attempt, true);
+        this.bus.emit('attempt', s.id, attempt.id, 'resume');
         return;
       }
       case 'REVEAL_PRACTICE':
@@ -106,10 +118,15 @@ export class RoundsService {
         if (next >= roundCountFor(s, game)) throw new BadRequestException('no more rounds; show game results');
         const a = await this.prepare(s, game, next, false);
         await this.update(s.id, { state: 'Ready', round_index: next, current_attempt_id: a.id });
+        this.bus.emit('attempt', s.id, a.id, 'ready');
         return;
       }
       case 'SHOW_GAME_RESULTS':
-        await this.update(s.id, { state: 'GameResults', current_attempt_id: null });
+        this.live.clear(s.id);
+        await this.update(s.id, { state: 'GameResults', current_attempt_id: null, podium_step: 0, standings_page: 0 });
+        return;
+      case 'PODIUM_STEP':
+        await this.update(s.id, { podium_step: Math.min(4, Math.max(0, Math.trunc(p.step ?? 0))) });
         return;
       case 'NEXT_GAME': {
         if (s.game_index + 1 >= GAME_ORDER.length) throw new BadRequestException('no next game; show final results');
@@ -118,7 +135,8 @@ export class RoundsService {
         return;
       }
       case 'SHOW_FINAL_RESULTS':
-        await this.update(s.id, { state: 'TournamentResults', current_attempt_id: null, ceremony_step: 0 });
+        this.live.clear(s.id);
+        await this.update(s.id, { state: 'TournamentResults', current_attempt_id: null, ceremony_step: 0, standings_page: 0 });
         return;
       case 'CEREMONY_STEP':
         await this.update(s.id, { ceremony_step: Math.min(4, Math.max(0, Math.trunc(p.step ?? 0))) });
@@ -131,21 +149,30 @@ export class RoundsService {
         if (!p.reason?.trim()) throw new BadRequestException('a reason is required to void a round');
         this.live.clear(s.id);
         await this.repo.void(attempt.id, p.reason.trim());
-        const replay = await this.prepare(s, attempt.game_type, attempt.round_index, attempt.is_practice, attempt.is_tiebreak, attempt.tiebreak_participants);
+        let replay: AttemptRow;
+        if (attempt.is_tiebreak) {
+          // A voided tie-break must not keep influencing the ordering, and its
+          // replay uses the next unused question (§10.4).
+          await this.db.query('UPDATE participants SET tie_break = NULL WHERE session_id = $1', [s.id]);
+          replay = await this.createTiebreak(s, attempt.tiebreak_participants ?? []);
+        } else {
+          replay = await this.prepare(s, attempt.game_type, attempt.round_index, attempt.is_practice);
+        }
         await this.update(s.id, { state: attempt.is_practice ? 'Instructions' : 'Ready', paused: false, current_attempt_id: replay.id });
+        this.bus.emit('attempt', s.id, replay.id, 'void');
         return;
       }
       case 'START_TIEBREAK': {
         const ids = (p.participantIds ?? []).filter((x) => typeof x === 'string');
         if (ids.length < 2) throw new BadRequestException('a tie-break needs at least two participants');
-        const q = s.content.ordering.tieBreaks[0];
-        if (!q) throw new BadRequestException('no tie-break content');
-        const a = await this.repo.create({ sessionId: s.id, gameType: 'ORDER', roundIndex: 900, contentId: q.id, isPractice: false, content: q, durationMs: q.durationMs, isTiebreak: true, tiebreakParticipants: ids });
+        const a = await this.createTiebreak(s, ids);
         await this.update(s.id, { state: 'Ready', current_attempt_id: a.id });
+        this.bus.emit('attempt', s.id, a.id, 'ready');
         return;
       }
       case 'CLOSE_SESSION':
         this.live.clear(s.id);
+        this.race.forget(s.id);
         await this.sessions.close(s.id);
         return;
       default:
@@ -153,14 +180,47 @@ export class RoundsService {
     }
   }
 
-  private async prepare(s: SessionRow, game: GameType, roundIndex: number, practice: boolean, tiebreak = false, tieIds: string[] | null = null): Promise<AttemptRow> {
+  /** Host-controlled display language / default participant language (plan v2 §4.3). */
+  async setLanguages(sessionId: string, langs: { displayLang?: Lang; defaultParticipantLang?: Lang }): Promise<SessionSnapshot> {
+    return this.serial(sessionId, async () => {
+      await this.sessions.getById(sessionId);
+      const patch: SessionPatch = {};
+      if (langs.displayLang) patch.display_lang = langs.displayLang;
+      if (langs.defaultParticipantLang) patch.default_participant_lang = langs.defaultParticipantLang;
+      await this.update(sessionId, patch);
+      await this.sessions.audit(sessionId, 'SET_LANGUAGES', langs as Record<string, unknown>);
+      return this.publish(sessionId);
+    });
+  }
+
+  private async createTiebreak(s: SessionRow, ids: string[]): Promise<AttemptRow> {
+    const bank = s.content.ordering.tieBreaks;
+    if (!bank.length) throw new BadRequestException('no tie-break content');
+    // Rotate through the prepared tie-break questions so a replay never repeats one already shown.
+    const q = bank[(await this.repo.tiebreakCount(s.id)) % bank.length]!;
+    return this.repo.create({
+      sessionId: s.id, gameType: 'ORDER', roundIndex: 900, contentId: q.id, isPractice: false, content: q,
+      durationMs: q.durationMs, isTiebreak: true, tiebreakParticipants: ids, scoringRuleVersion: this.ruleVersion(s),
+    });
+  }
+
+  private ruleVersion(s: SessionRow): string {
+    return s.content?.scoringRuleVersion ?? SCORING_RULE_VERSION_V1;
+  }
+
+  private async prepare(s: SessionRow, game: GameType, roundIndex: number, practice: boolean): Promise<AttemptRow> {
     const c = s.content;
     const content = game === 'RLGL' ? (practice ? c.races.practice : c.races.scored[roundIndex])
       : game === 'GEO' ? (practice ? c.countries.practice : c.countries.scored[roundIndex])
       : (practice ? c.ordering.practice : c.ordering.scored[roundIndex]);
     if (!content) throw new BadRequestException('round content missing');
     const id = 'id' in content ? content.id : content.code;
-    return this.repo.create({ sessionId: s.id, gameType: game, roundIndex, contentId: id, isPractice: practice, content, durationMs: content.durationMs, isTiebreak: tiebreak, tiebreakParticipants: tieIds });
+    // A prepared round never shows the previous round's live engine (BUG-A).
+    this.live.clear(s.id);
+    return this.repo.create({
+      sessionId: s.id, gameType: game, roundIndex, contentId: id, isPractice: practice, content,
+      durationMs: content.durationMs, scoringRuleVersion: this.ruleVersion(s),
+    });
   }
 
   /** Start Practice / Start Round: shared 3 s countdown, then the round (§4.5). */
@@ -172,18 +232,27 @@ export class RoundsService {
     await this.repo.start(a.id, new Date(countdownEnds), new Date(deadline), n);
     await this.update(s.id, { state: 'Countdown', paused: false, current_attempt_id: a.id });
     this.armTimers(s.id, a.id, countdownEnds, deadline, a, false);
+    this.bus.emit('attempt', s.id, a.id, 'countdown');
   }
 
   private armTimers(sessionId: string, attemptId: string, countdownEnds: number, deadline: number, a: AttemptRow, resumed: boolean): void {
-    const live = this.live.get(sessionId) ?? this.live.create(sessionId, attemptId, null);
-    this.live.after(live, countdownEnds - Date.now(), () => void this.serial(sessionId, async () => {
+    // The runtime must belong to THIS attempt. Reuse it only for a RESUME of the
+    // same attempt (keeps the frozen engine); otherwise start fresh (BUG-A).
+    let live = this.live.get(sessionId);
+    if (!live || live.attemptId !== attemptId) {
+      live = this.live.create(sessionId, attemptId, null);
+    } else {
+      this.live.cancelTimers(sessionId);
+    }
+    const runtime = live;
+    this.live.after(runtime, countdownEnds - Date.now(), () => void this.serial(sessionId, async () => {
       const s = await this.sessions.getById(sessionId);
       if (s.current_attempt_id !== attemptId || s.paused) return;
       await this.update(sessionId, { state: 'RoundActive' });
-      if (a.game_type === 'RLGL') await this.race.onActive(s, a, live, resumed, deadline);
+      if (a.game_type === 'RLGL') await this.race.onActive(s, a, runtime, resumed, deadline);
       await this.publish(sessionId);
     }));
-    this.live.after(live, deadline - Date.now(), () => void this.closeRound(sessionId, attemptId));
+    this.live.after(runtime, deadline - Date.now(), () => void this.closeRound(sessionId, attemptId));
   }
 
   /** Timer expiry, all locked, or no racer can continue → InputLocked + "Waiting for the host". */
@@ -199,6 +268,17 @@ export class RoundsService {
     });
   }
 
+  private scoringContext(s: SessionRow, a: AttemptRow): RoundScoringContext {
+    return { rules: scoringRules(a.scoring_rule_version ?? this.ruleVersion(s)), windowMs: a.duration_ms, registered: a.participant_count };
+  }
+
+  private score(s: SessionRow, a: AttemptRow, answers: Awaited<ReturnType<RoundRepo['answers']>>, people: { id: string; name: string }[]): RoundScoreResult {
+    const ctx = this.scoringContext(s, a);
+    return a.game_type === 'ORDER' ? scoreOrderRound(a.content as unknown as OrderContent, answers, people, ctx)
+      : a.game_type === 'GEO' ? scoreGeoRound(a.content as never, answers, people, ctx)
+      : scoreRaceRound(answers, people, ctx);
+  }
+
   /** Scores and publishes once; a retried Reveal is a no-op (§12.9). */
   private async reveal(s: SessionRow, a: AttemptRow): Promise<void> {
     if (await this.repo.markRevealed(a.id)) {
@@ -206,21 +286,25 @@ export class RoundsService {
         'SELECT id, name FROM participants WHERE session_id = $1 AND removed_at IS NULL ORDER BY number', [s.id]);
       const scope = a.tiebreak_participants ? people.filter((p) => a.tiebreak_participants!.includes(p.id)) : people;
       const answers = await this.repo.answers(a.id);
-      const r: RoundScoreResult = a.game_type === 'ORDER' ? scoreOrderRound(a.content as unknown as OrderContent, answers, scope)
-        : a.game_type === 'GEO' ? scoreGeoRound(a.content as never, answers, scope)
-        : scoreRaceRound(answers, scope);
+      const r = this.score(s, a, answers, scope);
       for (const e of r.entries) await this.repo.writeScore(a.id, e.participantId, a.is_practice ? 0 : e.raw, e.detail);
       if (a.is_tiebreak) {
-        const started = a.countdown_ends_at?.getTime() ?? 0;
-        const values = tieBreakValues(r.entries.map((e) => ({ participantId: e.participantId, correctPositions: Number(e.detail['correctPositions'] ?? 0), lockedAt: answers.find((x) => x.participant_id === e.participantId)?.locked_at?.getTime() ?? null, roundStartedAt: started })));
+        const values = tieBreakValues(r.entries.map((e) => ({
+          participantId: e.participantId,
+          correctPositions: Number(e.detail['correctPositions'] ?? 0),
+          timeMs: answers.find((x) => x.participant_id === e.participantId)?.time_ms ?? null,
+        })));
         for (const [pid, v] of values) await this.db.query('UPDATE participants SET tie_break = $2 WHERE id = $1', [pid, v]);
       }
-      for (const e of r.entries) this.bus.emit('personal', e.participantId, { attemptId: a.id, result: { raw: e.raw, label: e.detail['label'] } });
+      for (const e of r.entries) {
+        const { label, ...detail } = e.detail;
+        this.bus.emit('personal', e.participantId, { attemptId: a.id, result: { raw: e.raw, label, ...detail } });
+      }
     }
     await this.update(s.id, { state: a.is_tiebreak ? 'TournamentResults' : 'Reveal' });
   }
 
-  async update(sessionId: string, patch: Partial<Pick<SessionRow, 'state' | 'paused' | 'game_index' | 'round_index' | 'ceremony_step' | 'standings_page' | 'current_attempt_id'>>): Promise<void> {
+  async update(sessionId: string, patch: SessionPatch): Promise<void> {
     const keys = Object.keys(patch) as (keyof typeof patch)[];
     if (!keys.length) return;
     const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
@@ -242,16 +326,14 @@ export class RoundsService {
       readyCount: counts.ready,
       reveal,
       standings: showStandings ? standings : null,
-      race: a?.game_type === 'RLGL' ? this.race.snapshot(s.id) : null,
+      race: a?.game_type === 'RLGL' ? this.race.snapshot(s.id, a.id) : null,
     });
   }
 
   private async revealPayload(s: SessionRow, a: AttemptRow): Promise<SessionSnapshot['reveal']> {
     const people = await this.db.query<{ id: string; name: string }>('SELECT id, name FROM participants WHERE session_id = $1 AND removed_at IS NULL', [s.id]);
     const answers = await this.repo.answers(a.id);
-    if (a.game_type === 'ORDER') return scoreOrderRound(a.content as unknown as OrderContent, answers, people).reveal;
-    if (a.game_type === 'GEO') return scoreGeoRound(a.content as never, answers, people).reveal;
-    return scoreRaceRound(answers, people).reveal;
+    return this.score(s, a, answers, people).reveal;
   }
 
   async publish(sessionId: string): Promise<SessionSnapshot> {
@@ -262,5 +344,40 @@ export class RoundsService {
 
   stateOf(s: SessionRow): SessionState {
     return s.state;
+  }
+
+  // ------------------------------------------------------- restart recovery
+
+  onApplicationBootstrap(): void {
+    void this.recoverAfterRestart().catch((err: unknown) => this.log.warn(`restart recovery skipped: ${(err as Error).message}`));
+  }
+
+  /**
+   * A server restart loses every in-memory runtime (§11 "server restart"):
+   * a live race is voided (nothing can be reconstructed) and replayed from
+   * Ready; a live globe/ordering round is paused because its answers are in the
+   * database and the host can simply resume it.
+   */
+  async recoverAfterRestart(): Promise<void> {
+    const rows = await this.repo.liveAttempts();
+    for (const a of rows) {
+      await this.serial(a.session_id, async () => {
+        const s = await this.sessions.getById(a.session_id);
+        if (s.current_attempt_id !== a.id || !['Countdown', 'RoundActive'].includes(s.state)) return;
+        if (a.game_type === 'RLGL') {
+          await this.repo.markInterrupted(a.id);
+          await this.repo.void(a.id, 'server restarted during the race');
+          const replay = await this.prepare(s, a.game_type, a.round_index, a.is_practice);
+          await this.update(s.id, { state: a.is_practice ? 'Instructions' : 'Ready', paused: false, current_attempt_id: replay.id });
+          await this.sessions.audit(s.id, 'RECOVER_RESTART', { attemptId: a.id, action: 'void-and-replay' });
+        } else if (!s.paused) {
+          const remaining = Math.max(0, (a.deadline_at?.getTime() ?? Date.now()) - Date.now());
+          await this.repo.pause(a.id, remaining);
+          await this.update(s.id, { paused: true });
+          await this.sessions.audit(s.id, 'RECOVER_RESTART', { attemptId: a.id, action: 'pause' });
+        }
+        this.log.warn(`session ${s.id}: recovered ${a.game_type} attempt ${a.id} after restart`);
+      });
+    }
   }
 }

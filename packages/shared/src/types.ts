@@ -27,12 +27,15 @@ export const GAME_TITLES: Record<GameType, string> = {
   ORDER: 'Order It!',
 };
 
-/** Explicit session states (spec §11). Pause is an overlay, not a state. */
+/**
+ * Explicit session states (spec §11). Pause is an overlay, not a state.
+ * A practice round runs through the same Ready/Countdown/RoundActive states
+ * and is distinguished by `SessionSnapshot.isPractice` only.
+ */
 export type SessionState =
   | 'Draft'
   | 'Lobby'
   | 'Instructions'
-  | 'Practice'
   | 'Ready'
   | 'Countdown'
   | 'RoundActive'
@@ -98,19 +101,24 @@ export type HostAction =
   | 'CLOSE_SESSION'
   | 'START_TIEBREAK'
   /** Host-driven leaderboard paging on the shared display (plan section 4). */
-  | 'STANDINGS_PAGE';
+  | 'STANDINGS_PAGE'
+  /** Per-game podium reveal while in GameResults (plan v2 §8). */
+  | 'PODIUM_STEP';
 
 /** Payload accepted with a host action (validated server-side). */
 export interface HostActionPayload {
   /** VOID_ROUND: mandatory reason, retained for audit. */
   reason?: string;
-  /** CEREMONY_STEP: 0 intro, 1 third, 2 second, 3 first, 4 full table. */
+  /** CEREMONY_STEP / PODIUM_STEP: 0 none, 1 third, 2 second, 3 first, 4 full table. */
   step?: number;
   /** START_TIEBREAK: participants sharing a top-three rank. */
   participantIds?: string[];
   /** STANDINGS_PAGE: zero-based standings page to show on the display. */
   page?: number;
 }
+
+/** Rows per standings page on the shared display; the host pages, the display never scrolls. */
+export const DISPLAY_ROWS_PER_PAGE = 9;
 
 export interface StandingRow {
   rank: number;
@@ -151,6 +159,13 @@ export interface SessionSnapshot {
   ceremonyStep: number;
   /** Zero-based standings page for the shared display; host-set, seq-ordered. */
   standingsPage: number;
+  /** Per-game podium step while in GameResults (0 none … 4 table). Optional for older servers. */
+  podiumStep?: number;
+  /** Host-controlled language of the shared display and default for new participants. */
+  displayLang?: Lang;
+  defaultParticipantLang?: Lang;
+  /** Scoring rule version frozen into this session ('1.2.0' or '2.0.0'). */
+  scoringRuleVersion?: string;
   eventStartedAt: number | null;
   /** Round content visible to participants (never includes solutions before reveal). */
   roundPublic: RoundPublic | null;
@@ -187,6 +202,24 @@ export type RoundPublic =
       durationMs: number;
     };
 
+/**
+ * Per-participant scoring detail published at reveal (v2 base + speed split).
+ * Every field is optional so an older client never crashes on a newer server.
+ */
+export interface RoundResultDetail {
+  base?: number;
+  speed?: number;
+  /** Active ms to the manual lock / finish; null when never locked. */
+  timeMs?: number | null;
+  distanceKm?: number | null;
+  inside?: boolean;
+  correctPositions?: number;
+  lockedManually?: boolean;
+  raceState?: RaceLifeState;
+  finishRank?: number | null;
+  progress?: number;
+}
+
 export type RevealPayload =
   | {
       type: 'ORDER';
@@ -195,6 +228,7 @@ export type RevealPayload =
       explanationAr: string;
       perfectCount: number;
       topFive: { name: string; score: number }[];
+      perParticipant?: ({ participantId: string; name: string; raw: number } & RoundResultDetail)[];
     }
   | {
       type: 'GEO';
@@ -203,11 +237,15 @@ export type RevealPayload =
       countryNameAr: string;
       insideCount: number;
       topFive: { name: string; score: number }[];
-      pins: { participantId: string; name: string; lat: number; lng: number; distanceKm: number; score: number }[];
+      pins: ({ participantId: string; name: string; lat: number; lng: number; distanceKm: number; score: number } & RoundResultDetail)[];
+      /** Accepted scoring geometry, for the reveal highlight (same data as scoring). */
+      geometry?: { type: 'MultiPolygon'; coordinates: number[][][][] } | null;
+      /** Reveal camera target. */
+      center?: { lat: number; lng: number; zoom?: number } | null;
     }
   | {
       type: 'RLGL';
-      results: { participantId: string; name: string; state: RaceLifeState; progress: number; rank: number | null; raw: number }[];
+      results: ({ participantId: string; name: string; state: RaceLifeState; progress: number; rank: number | null; raw: number } & RoundResultDetail)[];
     };
 
 export interface RaceSnapshot {
@@ -232,6 +270,8 @@ export interface RacePlayerPublic {
 
 /** Personal (private) round state for the participant's own phone. */
 export interface MyRoundState {
+  /** Attempt this state belongs to; the phone drops payloads for another attempt. */
+  attemptId?: string | null;
   locked: boolean;
   saved: boolean;
   pin: { lat: number; lng: number } | null;
@@ -243,7 +283,7 @@ export interface MyRoundState {
    * newer server; all values come from the existing scoring / standings
    * services — the client never invents a score.
    */
-  result: {
+  result: ({
     raw: number;
     label: string;
     /** Points earned in this round and the maximum this round could award. */
@@ -252,10 +292,17 @@ export interface MyRoundState {
     /** Points earned so far in the current game and its maximum. */
     gamePoints?: number;
     gameMax?: number;
+    /** Rank within the current game (game standings). */
+    gameRank?: number;
     /** Tournament total and rank across all games played so far. */
     tournamentTotal?: number;
     tournamentRank?: number;
-  } | null;
+  } & RoundResultDetail) | null;
+}
+
+/** Empty personal state for a new attempt (the server pushes this at every round start). */
+export function emptyMyRoundState(attemptId: string | null = null): MyRoundState {
+  return { attemptId, locked: false, saved: false, pin: null, order: null, race: null, result: null };
 }
 
 export const ROUND_HALF_UP = (x: number): number => Math.floor(x + 0.5);

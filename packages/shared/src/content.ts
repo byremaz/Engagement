@@ -79,7 +79,7 @@ export const RLGL_RACES: RaceContent[] = [
     scene: 'Break-area courtyard',
     durationMs: RLGL_RACE_DURATION_MS,
     autoGreenMs: [2000, 4000],
-    autoRedMs: [1500, 3000],
+    autoRedMs: [1200, 2500],
     purpose: 'scored',
     ...raceDefaults,
   },
@@ -95,8 +95,14 @@ export const RLGL_RACES: RaceContent[] = [
   },
 ];
 
-/** Minimum total green time an uninterrupted full-race Auto schedule must provide (§6.7). */
-export const RLGL_AUTO_MIN_GREEN_MS = 36_000;
+/**
+ * Minimum total green time an uninterrupted full-race Auto schedule must
+ * provide. Finishing needs 33.3 s of pure hold; humans lose ~0.4 s reacting
+ * to each GREEN, so 48 s (60 % of the race) keeps the finish reachable.
+ */
+export const RLGL_AUTO_MIN_GREEN_MS = 48_000;
+/** Same guarantee expressed as a fraction of the remaining race time. */
+export const RLGL_AUTO_MIN_GREEN_FRACTION = 0.6;
 
 // ---------------------------------------------------------------------------
 // Game 2: countries (§7.3, §10.2, §10.4)
@@ -133,8 +139,9 @@ export const GEO_COUNTRIES: CountryContent[] = [
   { code: 'JPN', name: 'Japan', difficulty: 'Medium', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: 36.5, lng: 138, zoom: 4 }, note: 'Island geography' },
   { code: 'ITA', name: 'Italy', difficulty: 'Medium', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: 42.5, lng: 12.5, zoom: 4.5 }, note: 'Smaller, recognizable shape' },
   { code: 'CAN', name: 'Canada', difficulty: 'Medium', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: 60, lng: -96, zoom: 2.5 }, note: 'Large northern country' },
-  { code: 'NOR', name: 'Norway', difficulty: 'Moderately challenging', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: 64.5, lng: 12, zoom: 3.5 }, note: 'Long, narrow geography' },
   { code: 'MDG', name: 'Madagascar', difficulty: 'Medium', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: -19, lng: 46.5, zoom: 4.5 }, note: 'Island off Africa' },
+  // The hardest target closes the game so difficulty rises to the final round.
+  { code: 'NOR', name: 'Norway', difficulty: 'Moderately challenging', purpose: 'scored', durationMs: GEO_ROUND_DURATION_MS, revealView: { lat: 64.5, lng: 12, zoom: 3.5 }, note: 'Long, narrow geography' },
 ];
 
 export const GEO_SPARES: CountryContent[] = [
@@ -252,7 +259,7 @@ export const HOW_TO_PLAY: Record<'RLGL' | 'GEO' | 'ORDER', HowToPlay> = {
       'Release on RED; moving gets you eliminated.',
       'Reach the finish to score. Eliminated players return next race.',
     ],
-    scoringNote: 'Eliminated = 0 points this race. Your previous scores stay safe.',
+    scoringNote: 'Finish = 80 points + up to 20 for speed. Alive at the end = up to 60. Eliminated = 0 this race; earlier points stay safe.',
     example: 'rlgl',
   },
   GEO: {
@@ -261,9 +268,9 @@ export const HOW_TO_PLAY: Record<'RLGL' | 'GEO' | 'ORDER', HowToPlay> = {
     steps: [
       'Rotate the globe to find the country.',
       'Tap to place your pin, then lock it.',
-      'Inside the country earns full points; closer pins earn more.',
+      'Inside the country earns full points; lock fast for a speed bonus.',
     ],
-    scoringNote: 'Inside the country = 100. Every 500 km away costs 10 points.',
+    scoringNote: 'Inside the country = 80 + up to 20 for speed. Outside: every 500 km costs 10 points.',
     example: 'geo',
   },
   ORDER: {
@@ -272,9 +279,9 @@ export const HOW_TO_PLAY: Record<'RLGL' | 'GEO' | 'ORDER', HowToPlay> = {
     steps: [
       'Read the requested order.',
       'Move the four cards from top to bottom.',
-      'Lock your answer. Each correct position earns 25 points.',
+      'Lock your answer. Each correct position earns 20 points.',
     ],
-    scoringNote: 'Each card in its correct position earns 25 points.',
+    scoringNote: 'Each card in its correct position earns 20 points. All four correct + a fast lock adds up to 20 more.',
     example: 'order',
   },
 };

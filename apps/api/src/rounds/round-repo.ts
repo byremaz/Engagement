@@ -30,6 +30,8 @@ export interface AttemptRow {
   interrupted: boolean;
   is_tiebreak: boolean;
   tiebreak_participants: string[] | null;
+  /** Scoring rule version copied from the session when the attempt was created. */
+  scoring_rule_version: string | null;
 }
 
 export interface AnswerRow {
@@ -40,6 +42,8 @@ export interface AnswerRow {
   locked_at: Date | null;
   raw_score: string | null;
   detail: Record<string, unknown> | null;
+  /** Active ms from input opening to the MANUAL lock (API clock); null = never locked manually. */
+  time_ms: number | null;
 }
 
 @Injectable()
@@ -61,15 +65,16 @@ export class RoundRepo {
     durationMs: number;
     isTiebreak?: boolean;
     tiebreakParticipants?: string[] | null;
+    scoringRuleVersion?: string | null;
   }): Promise<AttemptRow> {
     const row = await this.db.one<AttemptRow>(
       `INSERT INTO round_attempts
          (session_id, game_type, round_index, content_id, is_practice, attempt_no, content, duration_ms, seed,
-          is_tiebreak, tiebreak_participants)
+          is_tiebreak, tiebreak_participants, scoring_rule_version)
        VALUES ($1, $2, $3, $4, $5,
                COALESCE((SELECT max(attempt_no) FROM round_attempts
                           WHERE session_id = $1 AND game_type = $2 AND round_index = $3 AND is_practice = $5), 0) + 1,
-               $6::jsonb, $7, floor(random() * 2147483647)::int, $8, $9::jsonb)
+               $6::jsonb, $7, floor(random() * 2147483647)::int, $8, $9::jsonb, $10)
        RETURNING *`,
       [
         input.sessionId,
@@ -81,9 +86,28 @@ export class RoundRepo {
         input.durationMs,
         input.isTiebreak ?? false,
         input.tiebreakParticipants ? JSON.stringify(input.tiebreakParticipants) : null,
+        input.scoringRuleVersion ?? null,
       ],
     );
     return row!;
+  }
+
+  /** Number of tie-break attempts created so far (voided ones included) — picks the next question. */
+  async tiebreakCount(sessionId: string): Promise<number> {
+    const row = await this.db.one<{ n: string }>(
+      'SELECT count(*)::text AS n FROM round_attempts WHERE session_id = $1 AND is_tiebreak = true',
+      [sessionId],
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  /** Attempts that a server restart left live (no in-memory runtime exists any more). */
+  async liveAttempts(): Promise<(AttemptRow & { session_state: string; session_paused: boolean })[]> {
+    return this.db.query(
+      `SELECT r.*, s.state AS session_state, s.paused AS session_paused
+       FROM sessions s JOIN round_attempts r ON r.id = s.current_attempt_id
+       WHERE s.closed_at IS NULL AND s.state IN ('Countdown', 'RoundActive')`,
+    );
   }
 
   async start(id: string, countdownEndsAt: Date, deadlineAt: Date, participantCount: number): Promise<void> {
@@ -174,15 +198,16 @@ export class RoundRepo {
     return rows.length > 0;
   }
 
-  async lock(attemptId: string, participantId: string, payload: unknown): Promise<boolean> {
+  /** Manual lock; `timeMs` is the active round time measured by the API at this instant (plan §7.5). */
+  async lock(attemptId: string, participantId: string, payload: unknown, timeMs: number | null = null): Promise<boolean> {
     const rows = await this.db.query(
-      `INSERT INTO answers (attempt_id, participant_id, payload, saved_at, locked_at)
-       VALUES ($1, $2, $3::jsonb, now(), now())
+      `INSERT INTO answers (attempt_id, participant_id, payload, saved_at, locked_at, time_ms)
+       VALUES ($1, $2, $3::jsonb, now(), now(), $4)
        ON CONFLICT (attempt_id, participant_id)
-       DO UPDATE SET payload = EXCLUDED.payload, saved_at = now(), locked_at = now()
+       DO UPDATE SET payload = EXCLUDED.payload, saved_at = now(), locked_at = now(), time_ms = EXCLUDED.time_ms
        WHERE answers.locked_at IS NULL
        RETURNING attempt_id`,
-      [attemptId, participantId, JSON.stringify(payload)],
+      [attemptId, participantId, JSON.stringify(payload), timeMs],
     );
     return rows.length > 0;
   }
@@ -206,14 +231,22 @@ export class RoundRepo {
     );
   }
 
-  /** Per-participant raw sums for revealed, non-voided, scored attempts of a game. */
+  /**
+   * Per-participant raw sums for revealed, non-voided, scored attempts of a game.
+   * Only the LATEST revealed attempt per round counts, so a round can never be
+   * summed twice (§9.1: a replay replaces, never adds).
+   */
   async gameRawTotals(sessionId: string, gameType: GameType): Promise<Map<string, number>> {
     const rows = await this.db.query<{ participant_id: string; total: string }>(
       `SELECT a.participant_id, COALESCE(sum(a.raw_score), 0)::text AS total
        FROM answers a
-       JOIN round_attempts r ON r.id = a.attempt_id
-       WHERE r.session_id = $1 AND r.game_type = $2 AND r.is_practice = false AND r.is_tiebreak = false
-         AND r.voided_at IS NULL AND r.revealed_at IS NOT NULL
+       JOIN (
+         SELECT DISTINCT ON (round_index) id
+         FROM round_attempts
+         WHERE session_id = $1 AND game_type = $2 AND is_practice = false AND is_tiebreak = false
+           AND voided_at IS NULL AND revealed_at IS NOT NULL
+         ORDER BY round_index, attempt_no DESC
+       ) r ON r.id = a.attempt_id
        GROUP BY a.participant_id`,
       [sessionId, gameType],
     );
@@ -222,7 +255,7 @@ export class RoundRepo {
 
   async revealedRoundCount(sessionId: string, gameType: GameType): Promise<number> {
     const row = await this.db.one<{ n: string }>(
-      `SELECT count(*)::text AS n FROM round_attempts
+      `SELECT count(DISTINCT round_index)::text AS n FROM round_attempts
        WHERE session_id = $1 AND game_type = $2 AND is_practice = false AND is_tiebreak = false
          AND voided_at IS NULL AND revealed_at IS NOT NULL`,
       [sessionId, gameType],
@@ -230,9 +263,9 @@ export class RoundRepo {
     return Number(row?.n ?? 0);
   }
 
-  async attemptsForExport(sessionId: string): Promise<(AttemptRow & { participant_id: string; name: string; number: number; raw_score: string | null; locked_at: Date | null })[]> {
+  async attemptsForExport(sessionId: string): Promise<(AttemptRow & { participant_id: string; name: string; number: number; raw_score: string | null; locked_at: Date | null; time_ms: number | null; detail: Record<string, unknown> | null })[]> {
     return this.db.query(
-      `SELECT r.*, a.participant_id, p.name, p.number, a.raw_score, a.locked_at
+      `SELECT r.*, a.participant_id, p.name, p.number, a.raw_score, a.locked_at, a.time_ms, a.detail
        FROM round_attempts r
        JOIN answers a ON a.attempt_id = r.id
        JOIN participants p ON p.id = a.participant_id

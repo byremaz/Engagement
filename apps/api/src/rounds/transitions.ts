@@ -7,8 +7,12 @@ import type { HostAction, SessionState } from '@asas/shared';
 
 const ALLOWED: Record<HostAction, SessionState[]> = {
   SHOW_INSTRUCTIONS: ['Lobby', 'GameResults', 'Instructions'],
-  START_PRACTICE: ['Instructions', 'Reveal'],
+  // Practice only from Instructions; restarting it from a scored Reveal would
+  // orphan the round in progress.
+  START_PRACTICE: ['Instructions'],
   REVEAL_PRACTICE: ['InputLocked'],
+  // From Reveal only after the PRACTICE reveal (checked in RoundsService):
+  // a scored round must continue with NEXT_ROUND / SHOW_GAME_RESULTS.
   START_GAME: ['Instructions', 'Reveal'],
   START_ROUND: ['Ready'],
   PAUSE: ['Countdown', 'RoundActive'],
@@ -17,14 +21,17 @@ const ALLOWED: Record<HostAction, SessionState[]> = {
   NEXT_ROUND: ['Reveal'],
   SHOW_GAME_RESULTS: ['Reveal'],
   NEXT_GAME: ['GameResults'],
-  SHOW_FINAL_RESULTS: ['GameResults', 'Reveal', 'TournamentResults'],
+  // Never from Reveal: the last game's results screen must not be skipped.
+  SHOW_FINAL_RESULTS: ['GameResults', 'TournamentResults'],
   VOID_ROUND: ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'],
   START_TIEBREAK: ['TournamentResults'],
   OPEN_JOIN: [],
   CLOSE_JOIN: [],
   CEREMONY_STEP: ['TournamentResults'],
+  PODIUM_STEP: ['GameResults'],
   STANDINGS_PAGE: ['Reveal', 'GameResults', 'TournamentResults'],
-  CLOSE_SESSION: ['TournamentResults', 'Lobby', 'GameResults'],
+  // Any state where nothing is live can be closed (a stuck session must be closable).
+  CLOSE_SESSION: ['Lobby', 'Instructions', 'Ready', 'InputLocked', 'Reveal', 'GameResults', 'TournamentResults'],
 };
 
 export function canTransition(action: HostAction, state: SessionState, paused: boolean): string | null {

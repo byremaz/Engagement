@@ -17,11 +17,12 @@ import {
 } from '@nestjs/websockets';
 import type { Server, Socket } from 'socket.io';
 import type { HostAction, HostActionPayload } from '@asas/shared';
+import { emptyMyRoundState } from '@asas/shared';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { ParticipationService } from '../rounds/participation.service';
 import { RaceController } from '../rounds/race.controller';
 import { RoundRepo } from '../rounds/round-repo';
-import { RoundsEventBus } from '../rounds/rounds.events';
+import { RoundsEventBus, type AttemptEventReason } from '../rounds/rounds.events';
 import { RoundsService } from '../rounds/rounds.service';
 import { safeEqual } from '../sessions/host.guard';
 import { SessionsService } from '../sessions/sessions.service';
@@ -58,6 +59,24 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       for (const id of ids) this.server.to(`p:${id}`).emit('me', { eliminated: true, eventId });
     });
     bus.on('signal', (sid, color, eventId, effectiveAt) => this.server.to(`s:${sid}`).emit('signal', { color, eventId, effectiveAt }));
+    bus.on('race', (sid, attemptId, race) => this.server.to(`s:${sid}`).emit('race', { attemptId, race }));
+    bus.on('attempt', (sid, attemptId, reason) => void this.pushAttemptState(sid, attemptId, reason).catch((e) => this.log.warn(`attempt push failed: ${(e as Error).message}`)));
+  }
+
+  /**
+   * A new attempt is live (or resumed): every connected phone gets a fresh
+   * personal state so nothing from the previous round (lock, pin, order,
+   * result) survives on the client (plan v2, BUG-H).
+   */
+  private async pushAttemptState(sessionId: string, attemptId: string, reason: AttemptEventReason): Promise<void> {
+    const sockets = await this.server.in(`s:${sessionId}`).fetchSockets();
+    const attempt = reason === 'resume' ? await this.repo.get(attemptId) : null;
+    for (const sock of sockets) {
+      const auth = (sock.data as { auth?: Auth }).auth;
+      if (auth?.role !== 'participant' || !auth.participantId) continue;
+      const me = attempt ? await this.participation.myState(attempt, auth.participantId) : emptyMyRoundState(attemptId);
+      sock.emit('me', me);
+    }
   }
 
   private authOf(client: Socket): Auth | null {

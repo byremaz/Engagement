@@ -5,5 +5,7 @@
 export * from './types';
 export * from './life';
 export * from './scoring';
+export * from './timing';
+export * from './podium';
 export * from './content';
 export * from './content.ar';

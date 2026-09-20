@@ -1,19 +1,132 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  SCORING_RULE_VERSION,
+  SCORING_RULE_VERSION_V1,
   buildStandings,
   geoGameScore,
   geoRoundScore,
+  geoRoundScoreV2,
   initialOrderFor,
   orderGameScore,
   rlglGameScore,
   scoreOrder,
+  scoreOrderV2,
   scoreRace,
+  scoreRaceV2,
+  scoringRules,
+  speedBonus,
   tieBreakValues,
   topThreeTies,
   type RaceParticipation,
 } from '../src/scoring';
 import { ORDER_QUESTIONS, validateContentBank } from '../src/content';
+
+const near = (a: number, b: number, eps = 0.05): void => assert.ok(Math.abs(a - b) < eps, `${a} ≠ ${b}`);
+
+describe('Scoring v2 (plan §7): 80 achievement + 20 speed', () => {
+  it('speed bonus is linear over the window, bucketed to 100 ms, and 0 when never locked', () => {
+    assert.equal(speedBonus(0, 20_000), 20);
+    assert.equal(speedBonus(10_000, 20_000), 10);
+    assert.equal(speedBonus(20_000, 20_000), 0);
+    assert.equal(speedBonus(25_000, 20_000), 0);
+    assert.equal(speedBonus(null, 20_000), 0);
+    assert.equal(speedBonus(1_049, 20_000), speedBonus(1_000, 20_000)); // same bucket
+  });
+
+  it('race: first finisher 100, +5 s → 93.3, +15 s → 80; alive 60·p; eliminated 0', () => {
+    const res = new Map(
+      scoreRaceV2([
+        { participantId: 'first', state: 'finished', progress: 100, finishActiveMs: 40_000 },
+        { participantId: 'plus5', state: 'finished', progress: 100, finishActiveMs: 45_000 },
+        { participantId: 'plus10', state: 'finished', progress: 100, finishActiveMs: 50_000 },
+        { participantId: 'plus15', state: 'finished', progress: 100, finishActiveMs: 55_000 },
+        { participantId: 'late', state: 'finished', progress: 100, finishActiveMs: 70_000 },
+        { participantId: 'alive90', state: 'alive', progress: 90, finishActiveMs: null },
+        { participantId: 'alive50', state: 'alive', progress: 50, finishActiveMs: null },
+        { participantId: 'dead95', state: 'eliminated', progress: 95, finishActiveMs: null },
+      ]).map((r) => [r.participantId, r]),
+    );
+    assert.equal(res.get('first')!.raw, 100);
+    near(res.get('plus5')!.raw, 93.33);
+    near(res.get('plus10')!.raw, 86.67);
+    assert.equal(res.get('plus15')!.raw, 80);
+    assert.equal(res.get('late')!.raw, 80);
+    assert.equal(res.get('alive90')!.raw, 54);
+    assert.equal(res.get('alive50')!.raw, 30);
+    assert.equal(res.get('dead95')!.raw, 0);
+    assert.equal(res.get('first')!.rank, 1);
+    assert.equal(res.get('plus5')!.rank, 2);
+    // Finishing last still beats the best possible survivor.
+    assert.ok(res.get('late')!.raw > 60);
+    // Game examples from the plan.
+    assert.equal(rlglGameScore([100, 0, 30]), 433);
+    assert.equal(rlglGameScore([93.3, 86.7, 100]), 933);
+  });
+
+  it('race: finishers in the same 100 ms bucket share rank and points', () => {
+    const [a, b] = scoreRaceV2([
+      { participantId: 'a', state: 'finished', progress: 100, finishActiveMs: 30_000 },
+      { participantId: 'b', state: 'finished', progress: 100, finishActiveMs: 30_090 },
+    ]);
+    assert.equal(a.rank, 1);
+    assert.equal(b.rank, 1);
+    assert.equal(a.raw, b.raw);
+  });
+
+  it('geo: inside 80 + speed (manual lock only); outside 10 per 500 km; no pin 0', () => {
+    const W = 25_000;
+    near(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 3_000, lockedManually: true, windowMs: W }).raw, 97.6);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 10_000, lockedManually: true, windowMs: W }).raw, 92);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 20_000, lockedManually: true, windowMs: W }).raw, 84);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: null, lockedManually: false, windowMs: W }).raw, 80);
+    assert.equal(geoRoundScoreV2({ distanceKm: 100, inside: false, timeMs: 2_000, lockedManually: true, windowMs: W }).raw, 78);
+    assert.equal(geoRoundScoreV2({ distanceKm: 500, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 70);
+    assert.equal(geoRoundScoreV2({ distanceKm: 1_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 60);
+    assert.equal(geoRoundScoreV2({ distanceKm: 2_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 40);
+    assert.equal(geoRoundScoreV2({ distanceKm: 4_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
+    assert.equal(geoRoundScoreV2({ distanceKm: 4_500, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
+    assert.equal(geoRoundScoreV2({ distanceKm: null, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
+    // A slow inside pin always beats a fast pin 1 km outside.
+    assert.ok(80 > geoRoundScoreV2({ distanceKm: 1, inside: false, timeMs: 0, lockedManually: true, windowMs: W }).raw);
+    // Plan example: 5 inside (avg 8 s) + 2 at 600 km + 1 none → 755.
+    const inside8 = geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 8_000, lockedManually: true, windowMs: W }).raw;
+    const out600 = geoRoundScoreV2({ distanceKm: 600, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw;
+    assert.equal(geoGameScore([inside8, inside8, inside8, inside8, inside8, out600, out600, 0]), 755);
+  });
+
+  it('order: 20 per position, perfect + manual lock adds speed; a fast half-right never beats a slow perfect', () => {
+    const correct = ['a', 'b', 'c', 'd'];
+    const W = 20_000;
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: 3_000, lockedManually: true, windowMs: W }).raw, 97);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: 8_000, lockedManually: true, windowMs: W }).raw, 92);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: 15_000, lockedManually: true, windowMs: W }).raw, 85);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: null, lockedManually: false, windowMs: W }).raw, 80);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: ['b', 'a', 'c', 'd'], timeMs: 1_000, lockedManually: true, windowMs: W }).raw, 40);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: ['d', 'a', 'b', 'c'], timeMs: 1_000, lockedManually: true, windowMs: W }).raw, 0);
+    assert.equal(scoreOrderV2({ correctOrder: correct, answer: null, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
+    const perfect7 = scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: 7_000, lockedManually: true, windowMs: W }).raw;
+    assert.equal(orderGameScore([perfect7, perfect7, perfect7, perfect7, perfect7, perfect7, 40, 40, 0, 0]), 638);
+  });
+
+  it('rule sets are selected by the frozen session version; v1 keeps 25 per card and its formulas', () => {
+    assert.equal(scoringRules(SCORING_RULE_VERSION).version, '2.0.0');
+    assert.equal(scoringRules(SCORING_RULE_VERSION_V1).version, '1.2.0');
+    assert.equal(scoringRules(undefined).version, '1.2.0');
+    const v1 = scoringRules(SCORING_RULE_VERSION_V1);
+    assert.equal(v1.order({ correctOrder: ['a', 'b', 'c', 'd'], answer: ['a', 'b', 'c', 'd'], timeMs: 0, lockedManually: true, windowMs: 20_000 }).raw, 100);
+    assert.equal(v1.geo({ distanceKm: 640, inside: false, timeMs: null, lockedManually: false, windowMs: 25_000 }).raw, 87.2);
+    // v1 race uses the registered count, not the number of rows scored (BUG-C).
+    const [, second] = v1.race(
+      [
+        { participantId: 'a', state: 'finished', progress: 100, finishActiveMs: 30_000 },
+        { participantId: 'b', state: 'finished', progress: 100, finishActiveMs: 31_000 },
+      ],
+      5,
+    );
+    assert.equal(second.raw, 95); // 80 + 20·(5−2)/4
+  });
+});
 
 describe('Red Light, Green Light (§6.8)', () => {
   it('ranks finishers with 0.1 s buckets and scores the rest by progress', () => {
@@ -96,11 +209,11 @@ describe('Standings and ties (§9)', () => {
 
   it('tie-break values prefer correct cards, then lock speed with 0.5 s equality', () => {
     const v = tieBreakValues([
-      { participantId: 'fast', correctPositions: 4, lockedAt: 5_000, roundStartedAt: 0 },
-      { participantId: 'same', correctPositions: 4, lockedAt: 5_300, roundStartedAt: 0 },
-      { participantId: 'slow', correctPositions: 4, lockedAt: 9_000, roundStartedAt: 0 },
-      { participantId: 'unlocked', correctPositions: 4, lockedAt: null, roundStartedAt: 0 },
-      { participantId: 'three', correctPositions: 3, lockedAt: 1_000, roundStartedAt: 0 },
+      { participantId: 'fast', correctPositions: 4, timeMs: 5_000 },
+      { participantId: 'same', correctPositions: 4, timeMs: 5_300 },
+      { participantId: 'slow', correctPositions: 4, timeMs: 9_000 },
+      { participantId: 'unlocked', correctPositions: 4, timeMs: null },
+      { participantId: 'three', correctPositions: 3, timeMs: 1_000 },
     ]);
     assert.equal(v.get('fast'), v.get('same'));
     assert.ok(v.get('fast')! > v.get('slow')!);

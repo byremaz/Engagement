@@ -4,8 +4,8 @@
  * using server time only (§12.3, §12.8). Scores are never accepted from clients.
  */
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import type { MyRoundState, OrderContent, RaceLifeState } from '@asas/shared';
-import { GAME_MAX } from '@asas/shared';
+import type { MyRoundState, OrderContent, RaceLifeState, RoundResultDetail } from '@asas/shared';
+import { GAME_MAX, emptyMyRoundState, lockTimeMs } from '@asas/shared';
 import { SessionsService } from '../sessions/sessions.service';
 import { RaceController } from './race.controller';
 import { RoundRepo, type AttemptRow } from './round-repo';
@@ -50,6 +50,12 @@ export class ParticipationService {
     return a;
   }
 
+  /** Active round time at this instant, measured on the API clock (plan §7.5). */
+  private lockTime(a: AttemptRow): number | null {
+    if (!a.deadline_at) return null;
+    return lockTimeMs({ deadlineAt: a.deadline_at.getTime(), durationMs: a.duration_ms }, Date.now());
+  }
+
   async savePin(sessionId: string, participantId: string, controllerId: string, lat: number, lng: number, lock: boolean): Promise<MyRoundState> {
     this.throttle(participantId);
     const a = await this.openAttempt(sessionId, participantId, controllerId);
@@ -58,7 +64,7 @@ export class ParticipationService {
       throw new BadRequestException('invalid coordinates');
     }
     const payload = { pin: { lat, lng } };
-    const ok = lock ? await this.repo.lock(a.id, participantId, payload) : await this.repo.save(a.id, participantId, payload);
+    const ok = lock ? await this.repo.lock(a.id, participantId, payload, this.lockTime(a)) : await this.repo.save(a.id, participantId, payload);
     if (!ok) throw new BadRequestException('answer already locked');
     return this.afterInput(sessionId, a, participantId);
   }
@@ -72,7 +78,7 @@ export class ParticipationService {
     if (!Array.isArray(order) || order.length !== 4 || new Set(order).size !== 4 || !order.every((id) => ids.includes(id))) {
       throw new BadRequestException('order must contain each of the four card IDs exactly once');
     }
-    const ok = lock ? await this.repo.lock(a.id, participantId, { order }) : await this.repo.save(a.id, participantId, { order });
+    const ok = lock ? await this.repo.lock(a.id, participantId, { order }, this.lockTime(a)) : await this.repo.save(a.id, participantId, { order });
     if (!ok) throw new BadRequestException('answer already locked');
     return this.afterInput(sessionId, a, participantId);
   }
@@ -80,7 +86,9 @@ export class ParticipationService {
   private async afterInput(sessionId: string, a: AttemptRow, participantId: string): Promise<MyRoundState> {
     const state = await this.myState(a, participantId);
     if (state.locked) {
-      const n = (await this.sessions.counts(sessionId)).participants;
+      // Everyone registered at round start must lock before the round auto-closes;
+      // a late joiner never blocks the room (uses the count captured at start).
+      const n = a.participant_count ?? (await this.sessions.counts(sessionId)).participants;
       const locked = await this.repo.responseCount(a.id);
       const expected = a.tiebreak_participants?.length ?? n;
       if (locked >= expected) await this.rounds.closeRound(sessionId, a.id); // all locked → close (§4.5)
@@ -103,28 +111,30 @@ export class ParticipationService {
 
   /** Personal state after reconnect: locked answer, saved draft, race life state, own result (§11). */
   async myState(a: AttemptRow | null, participantId: string): Promise<MyRoundState> {
-    const empty: MyRoundState = { locked: false, saved: false, pin: null, order: null, race: null, result: null };
-    if (!a) return empty;
+    if (!a) return emptyMyRoundState(null);
     const row = await this.repo.answerFor(a.id, participantId);
-    const liveRace = this.race.input; // presence check only
-    const raceSnap = this.race.snapshot(a.session_id)?.players.find((p) => p.participantId === participantId) ?? null;
-    void liveRace;
+    // Only a RACE attempt may read the live race engine: a stale engine must never
+    // leak an old life state into a globe or ordering round (BUG-B).
+    const raceSnap = a.game_type === 'RLGL'
+      ? this.race.snapshot(a.session_id, a.id)?.players.find((p) => p.participantId === participantId) ?? null
+      : null;
     const payload = (row?.payload ?? {}) as { pin?: { lat: number; lng: number }; order?: string[]; progress?: number; state?: RaceLifeState };
     return {
+      attemptId: a.id,
       locked: !!row?.locked_at,
       saved: !!row?.saved_at,
       pin: payload.pin ?? null,
       order: payload.order ?? null,
       race: raceSnap ? { progress: raceSnap.progress, state: raceSnap.state }
-        : payload.state ? { progress: payload.progress ?? 0, state: payload.state } : null,
+        : a.game_type === 'RLGL' && payload.state ? { progress: payload.progress ?? 0, state: payload.state } : null,
       result: row?.raw_score !== null && row?.raw_score !== undefined && a.revealed_at
-        ? await this.resultBreakdown(a, participantId, Number(row.raw_score), String(row.detail?.['label'] ?? ''))
+        ? await this.resultBreakdown(a, participantId, Number(row.raw_score), row.detail ?? {})
         : null,
     };
   }
 
   /**
-   * Personal result hierarchy: this round → this game → tournament total and rank.
+   * Personal result hierarchy: this round (base + speed) → this game → tournament.
    * Every number is read back from the existing scoring and standings services;
    * no scoring math is duplicated and nothing is invented here (§9.1, §12.5).
    */
@@ -132,21 +142,26 @@ export class ParticipationService {
     a: AttemptRow,
     participantId: string,
     raw: number,
-    label: string,
+    detail: Record<string, unknown>,
   ): Promise<NonNullable<MyRoundState['result']>> {
-    const base = { raw, label, roundPoints: Math.round(raw), roundMax: ROUND_RAW_MAX };
+    const { label, positions: _positions, ...rest } = detail as Record<string, unknown> & { label?: string; positions?: unknown };
+    const parts = rest as RoundResultDetail;
+    const base = { raw, label: String(label ?? ''), roundPoints: Math.round(raw), roundMax: ROUND_RAW_MAX, ...parts };
     if (a.is_practice) return base; // practice contributes to no total
     try {
       const session = await this.sessions.getById(a.session_id);
-      const [gameScores, standings] = await Promise.all([
+      const [gameScores, standings, gameRows] = await Promise.all([
         this.standings.gameScores(session, a.game_type),
         this.standings.tournament(session),
+        this.standings.forGame(session, a.game_type),
       ]);
       const mine = standings.find((r) => r.participantId === participantId);
+      const mineGame = gameRows.find((r) => r.participantId === participantId);
       return {
         ...base,
         gamePoints: gameScores?.get(participantId) ?? 0,
         gameMax: GAME_MAX,
+        gameRank: mineGame?.rank ?? 0,
         tournamentTotal: mine?.total ?? 0,
         tournamentRank: mine?.rank ?? 0,
       };

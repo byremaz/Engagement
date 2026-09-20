@@ -6,7 +6,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import type { DeviceInfo, ParticipantHostView, SessionState } from '@asas/shared';
+import type { DeviceInfo, Lang, ParticipantHostView, SessionState } from '@asas/shared';
 import { defaultFrozenContent } from '@asas/shared';
 import type { FrozenContent } from '@asas/shared';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
@@ -25,6 +25,11 @@ export interface SessionRow {
   round_index: number;
   ceremony_step: number;
   standings_page: number;
+  /** Per-game podium step while in GameResults (plan v2 §8). */
+  podium_step: number;
+  /** Host-controlled shared-display language and default for new participants. */
+  display_lang: Lang;
+  default_participant_lang: Lang;
   signal_mode: 'MANUAL' | 'AUTO';
   content_frozen: boolean;
   event_started_at: Date | null;

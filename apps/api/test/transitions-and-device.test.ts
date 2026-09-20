@@ -4,7 +4,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RLGL_RACES, RLGL_AUTO_MIN_GREEN_MS, RLGL_RACE_DURATION_MS } from '@asas/shared';
+import { RLGL_RACES, RLGL_AUTO_MIN_GREEN_FRACTION, RLGL_AUTO_MIN_GREEN_MS, RLGL_RACE_DURATION_MS } from '@asas/shared';
 import { canTransition } from '../src/rounds/transitions';
 import { buildAutoSchedule } from '../src/rounds/auto-schedule';
 import { detectDevice } from '../src/sessions/device';
@@ -24,6 +24,17 @@ describe('Host transitions (§4.5)', () => {
     assert.match(canTransition('START_GAME', 'GameResults', false) ?? '', /not allowed/);
     assert.equal(canTransition('START_GAME', 'Instructions', false), null);
     assert.equal(canTransition('START_PRACTICE', 'Instructions', false), null);
+  });
+
+  it('final results never skip the last game results, and practice cannot restart from a reveal', () => {
+    assert.match(canTransition('SHOW_FINAL_RESULTS', 'Reveal', false) ?? '', /not allowed/);
+    assert.equal(canTransition('SHOW_FINAL_RESULTS', 'GameResults', false), null);
+    assert.match(canTransition('START_PRACTICE', 'Reveal', false) ?? '', /not allowed/);
+    assert.equal(canTransition('PODIUM_STEP', 'GameResults', false), null);
+    assert.match(canTransition('PODIUM_STEP', 'Reveal', false) ?? '', /not allowed/);
+    // A stuck session can always be closed once nothing is live.
+    assert.equal(canTransition('CLOSE_SESSION', 'InputLocked', false), null);
+    assert.equal(canTransition('CLOSE_SESSION', 'Reveal', false), null);
   });
 
   it('pause is an overlay that blocks everything except resume and void', () => {
@@ -57,7 +68,7 @@ describe('Auto signal schedule (§6.7)', () => {
           const end = i + 1 < s.length ? s[i + 1].atMs : RLGL_RACE_DURATION_MS;
           if (s[i].color === 'GREEN') green += Math.min(end, RLGL_RACE_DURATION_MS) - s[i].atMs;
         }
-        assert.ok(green >= Math.min(RLGL_AUTO_MIN_GREEN_MS, RLGL_RACE_DURATION_MS * 0.45), `seed ${seed}: green ${green}`);
+        assert.ok(green >= Math.min(RLGL_AUTO_MIN_GREEN_MS, RLGL_RACE_DURATION_MS * RLGL_AUTO_MIN_GREEN_FRACTION), `seed ${seed}: green ${green}`);
       }
     }
   });

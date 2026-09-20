@@ -109,7 +109,8 @@ describe('RaceEngine elimination (§6.4, §6.9)', () => {
     const redAt = T0 + 10_000;
     hold(e, 'a', T0, redAt);
     e.setSignal('RED', redAt, 'MANUAL');
-    e.input('a', true, redAt + 50);
+    // Heartbeats keep arriving every 250 ms (a real, continued hold), all inside tolerance.
+    for (let t = redAt + 50; t < redAt + RLGL_RED_TOLERANCE_MS; t += 250) e.input('a', true, t);
     const ev = e.tick(redAt + RLGL_RED_TOLERANCE_MS);
     assert.ok(ev);
     assert.deepEqual(ev!.participantIds, ['a']);
@@ -205,6 +206,43 @@ describe('Section 9.9 required scenarios', () => {
     assert.equal(a.state, 'alive');
     assert.equal(a.finishedAt, null);
     assert.equal(e.noRacerCanContinue(), false);
+  });
+});
+
+describe('RaceEngine v2 inputs (plan §7.2)', () => {
+  it('records the active time to the finish line and excludes a pause from it', () => {
+    const e = engine(['a', 'b']);
+    e.setSignal('GREEN', T0, 'MANUAL');
+    hold(e, 'a', T0, T0 + 40_000); // 3 u/s → finishes at 33.3 s of hold
+    const a = e.players.get('a')!;
+    assert.equal(a.state, 'finished');
+    assert.ok(a.finishActiveMs !== null && Math.abs(a.finishActiveMs - 33_334) < 300, `finishActiveMs ${a.finishActiveMs}`);
+    // Pause for 20 s, then b finishes: the gap between them must not include the pause.
+    e.setPaused(true, T0 + 40_000);
+    e.setPaused(false, T0 + 60_000);
+    hold(e, 'b', T0 + 60_000, T0 + 100_000);
+    const b = e.players.get('b')!;
+    assert.equal(b.state, 'finished');
+    const gap = (b.finishActiveMs as number) - (a.finishActiveMs as number);
+    assert.ok(gap > 39_000 && gap < 41_000, `gap ${gap} should be ≈ 40 s of active time, not 60 s`);
+  });
+
+  it('honours a per-session red tolerance from the frozen content', () => {
+    const strict = new RaceEngine(['a'], T0, 3, 200);
+    strict.setSignal('GREEN', T0, 'MANUAL');
+    hold(strict, 'a', T0, T0 + 5_000);
+    strict.setSignal('RED', T0 + 5_000, 'MANUAL');
+    strict.input('a', true, T0 + 5_150);
+    assert.ok(strict.tick(T0 + 5_250), 'a 200 ms session eliminates at 250 ms');
+    const lenient = engine(['a']);
+    lenient.setSignal('GREEN', T0, 'MANUAL');
+    hold(lenient, 'a', T0, T0 + 5_000);
+    lenient.setSignal('RED', T0 + 5_000, 'MANUAL');
+    lenient.input('a', true, T0 + 5_150);
+    assert.equal(lenient.tick(T0 + 5_250), null, 'the 700 ms default is still safe at 250 ms');
+    lenient.input('a', false, T0 + 5_600);
+    lenient.tick(T0 + 6_000);
+    assert.equal(lenient.players.get('a')!.state, 'alive');
   });
 });
 

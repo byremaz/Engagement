@@ -23,6 +23,7 @@ import {
   GAME_ORDER,
   ORDER_LABELS_AR,
   RACE_LABELS_AR,
+  SCORING_RULE_VERSION_V1,
   initialOrderFor,
 } from '@asas/shared';
 import type { SessionRow } from '../sessions/sessions.service';
@@ -136,6 +137,10 @@ export function buildSnapshot(session: SessionRow, attempt: AttemptRow | null, e
     readyCount: extras.readyCount,
     ceremonyStep: session.ceremony_step,
     standingsPage: session.standings_page ?? 0,
+    podiumStep: session.podium_step ?? 0,
+    displayLang: session.display_lang ?? 'en',
+    defaultParticipantLang: session.default_participant_lang ?? 'en',
+    scoringRuleVersion: session.content?.scoringRuleVersion ?? SCORING_RULE_VERSION_V1,
     eventStartedAt: session.event_started_at ? session.event_started_at.getTime() : null,
     roundPublic: attempt && !attempt.voided_at ? roundPublicFor(attempt) : null,
     reveal: showReveal ? extras.reveal : null,

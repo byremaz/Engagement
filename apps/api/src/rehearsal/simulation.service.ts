@@ -11,6 +11,7 @@
 import { BadRequestException, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import type { CountryContent, OrderContent, SessionSnapshot } from '@asas/shared';
+import { RLGL_RED_TOLERANCE_MS } from '@asas/shared';
 import { DbService } from '../db/db.service';
 import { ParticipationService } from '../rounds/participation.service';
 import { RaceController } from '../rounds/race.controller';
@@ -197,7 +198,8 @@ export class SimulationService implements OnModuleDestroy {
         this.after(run, randomInt(200, 700), () => { run.holding.add(b.id); this.race.input(sessionId, b.id, true); });
       } else {
         // Weak bots occasionally release too late and get eliminated (demonstrates the death effect).
-        const lapse = Math.random() > b.skill ? randomInt(650, 1100) : randomInt(50, 250);
+        // The lapse must exceed the 700 ms shared tolerance or no bot ever dies.
+        const lapse = Math.random() > b.skill ? randomInt(RLGL_RED_TOLERANCE_MS + 150, RLGL_RED_TOLERANCE_MS + 700) : randomInt(100, 450);
         this.after(run, lapse, () => { run.holding.delete(b.id); this.race.input(sessionId, b.id, false); });
       }
     }

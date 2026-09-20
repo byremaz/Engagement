@@ -6,24 +6,71 @@
  */
 import { ROUND_HALF_UP, RaceLifeState, StandingRow } from './types';
 
-export const SCORING_RULE_VERSION = '1.2.0';
+/**
+ * Scoring rule version frozen into every NEW session (redesign plan v2 §7).
+ * Sessions created under 1.2.0 keep the v1 formulas via `scoringRules()`.
+ */
+export const SCORING_RULE_VERSION = '2.0.0';
+export const SCORING_RULE_VERSION_V1 = '1.2.0';
 
 export const GAME_MAX = 1000;
 export const TOURNAMENT_MAX = 3000;
 
 // ---------------------------------------------------------------------------
-// Game 1: Red Light, Green Light (spec §6.4, §6.8)
+// v2 shared rule: every round = up to 80 "achievement" + up to 20 "speed";
+// speed is granted only with the full achievement (finish / inside / 4 of 4)
+// and only for a manual lock, so a fast wrong answer can never beat a slow
+// right one (plan §7.1).
+// ---------------------------------------------------------------------------
+
+export const BASE_MAX = 80;
+export const SPEED_MAX = 20;
+/** Lock / finish times are compared in 100 ms buckets (same bucket = same points). */
+export const SPEED_BUCKET_MS = 100;
+
+export interface RoundScoreParts {
+  raw: number;
+  base: number;
+  speed: number;
+}
+
+/** Floors a duration to the shared 100 ms bucket; negative or invalid → 0. */
+export function bucketMs(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.floor(ms / SPEED_BUCKET_MS) * SPEED_BUCKET_MS;
+}
+
+/**
+ * Speed bonus (0-20): linear from 20 at t=0 to 0 at t=windowMs.
+ * `null` (never locked / never finished) → 0.
+ */
+export function speedBonus(timeMs: number | null, windowMs: number): number {
+  if (timeMs === null || !Number.isFinite(timeMs) || windowMs <= 0) return 0;
+  return SPEED_MAX * Math.max(0, 1 - bucketMs(timeMs) / windowMs);
+}
+
+// ---------------------------------------------------------------------------
+// Game 1: Red Light, Green Light (spec §6.4, §6.8; v2 in plan §7.2)
 // ---------------------------------------------------------------------------
 
 export const RLGL_TRACK_LENGTH = 100;
 export const RLGL_SPEED_UNITS_PER_SEC = 3;
 export const RLGL_RACE_DURATION_MS = 80_000;
 export const RLGL_PRACTICE_DURATION_MS = 20_000;
-export const RLGL_RED_TOLERANCE_MS = 200;
+/**
+ * Shared synchronization tolerance after a RED signal. 700 ms covers a human
+ * reaction (300-450 ms) plus venue network latency; the rule "moving on RED
+ * eliminates" is unchanged, only its fairness (plan decision, 20 Sep 2026).
+ */
+export const RLGL_RED_TOLERANCE_MS = 700;
 export const RLGL_HEARTBEAT_TIMEOUT_MS = 500;
 export const RLGL_SCORED_RACES = 3;
 /** Finishes within the same 0.1 s bucket share a rank (§6.8). */
 export const RLGL_FINISH_BUCKET_MS = 100;
+/** v2: finishing within this window after the first finisher still earns speed points. */
+export const RLGL_SPEED_WINDOW_MS = 15_000;
+/** v2: a survivor who never reached the line earns at most 60 (finishing is always worth more). */
+export const RLGL_TIMEOUT_MAX = 60;
 
 export interface RaceParticipation {
   participantId: string;
@@ -43,12 +90,12 @@ export interface RaceRawResult {
 }
 
 /**
- * Compute raw race scores (0-100) for every registered participant.
- * `participations` must include everyone registered at race start (N),
- * including players who disconnected later (§6.8).
+ * Compute raw race scores (0-100) for every registered participant (v1 rule).
+ * `n` is the number registered at race start, including players who
+ * disconnected later (§6.8); defaults to the participations given.
  */
-export function scoreRace(participations: RaceParticipation[]): RaceRawResult[] {
-  const n = participations.length;
+export function scoreRace(participations: RaceParticipation[], registered?: number): RaceRawResult[] {
+  const n = registered ?? participations.length;
   const finishers = participations
     .filter((p) => p.state === 'finished' && p.finishedAt !== null)
     .sort((a, b) => (a.finishedAt as number) - (b.finishedAt as number));
@@ -88,6 +135,68 @@ export function rlglGameScore(rawRaceScores: number[], plannedRaces = RLGL_SCORE
   return ROUND_HALF_UP((GAME_MAX * sum(rawRaceScores)) / denominator);
 }
 
+export interface RaceParticipationV2 {
+  participantId: string;
+  state: RaceLifeState;
+  progress: number;
+  /** Active (unpaused) ms from race start to the finish line; null unless finished. */
+  finishActiveMs: number | null;
+}
+
+export interface RaceRawResultV2 extends RaceRawResult, RoundScoreParts {
+  finishActiveMs: number | null;
+}
+
+/**
+ * v2 race scoring (plan §7.2):
+ *  finished   → 80 + 20 · max(0, 1 − (t − t_first) / 15 s), 100 ms buckets
+ *  alive      → 60 · progress / 100
+ *  eliminated → 0, regardless of progress
+ * Independent of how many people were registered, so a late joiner never
+ * changes anyone else's points.
+ */
+export function scoreRaceV2(participations: RaceParticipationV2[]): RaceRawResultV2[] {
+  const finishers = participations
+    .filter((p) => p.state === 'finished' && p.finishActiveMs !== null)
+    .sort((a, b) => (a.finishActiveMs as number) - (b.finishActiveMs as number));
+  const first = finishers.length ? bucketMs(finishers[0]!.finishActiveMs as number) : 0;
+
+  const rankById = new Map<string, number>();
+  let currentRank = 0;
+  let previousBucket: number | null = null;
+  finishers.forEach((f, index) => {
+    const bucket = bucketMs(f.finishActiveMs as number);
+    if (previousBucket === null || bucket !== previousBucket) {
+      currentRank = index + 1;
+      previousBucket = bucket;
+    }
+    rankById.set(f.participantId, currentRank);
+  });
+
+  return participations.map((p) => {
+    const ratio = clamp(p.progress / RLGL_TRACK_LENGTH, 0, 1);
+    if (p.state === 'eliminated') {
+      return { participantId: p.participantId, state: p.state, progress: p.progress, rank: null, raw: 0, base: 0, speed: 0, finishActiveMs: null };
+    }
+    if (p.state === 'finished' && p.finishActiveMs !== null) {
+      const gap = bucketMs(p.finishActiveMs) - first;
+      const speed = SPEED_MAX * Math.max(0, 1 - gap / RLGL_SPEED_WINDOW_MS);
+      return {
+        participantId: p.participantId,
+        state: p.state,
+        progress: RLGL_TRACK_LENGTH,
+        rank: rankById.get(p.participantId) ?? 1,
+        raw: BASE_MAX + speed,
+        base: BASE_MAX,
+        speed,
+        finishActiveMs: p.finishActiveMs,
+      };
+    }
+    const base = RLGL_TIMEOUT_MAX * ratio;
+    return { participantId: p.participantId, state: 'alive', progress: p.progress, rank: null, raw: base, base, speed: 0, finishActiveMs: null };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Game 2: Pin the Country (spec §7.5)
 // ---------------------------------------------------------------------------
@@ -107,6 +216,37 @@ export function geoRoundScore(distanceKm: number | null): number {
 export function geoGameScore(rawRoundScores: number[], plannedRounds = GEO_ROUNDS): number {
   const denominator = 100 * plannedRounds;
   return ROUND_HALF_UP((GAME_MAX * sum(rawRoundScores)) / denominator);
+}
+
+/** v2: outside the country costs 10 points per 500 km from a base of 80 (0 at 4000 km). */
+export const GEO_KM_PER_POINT = 50;
+export const GEO_ZERO_DISTANCE_KM_V2 = BASE_MAX * GEO_KM_PER_POINT;
+
+export interface GeoScoreInput {
+  /** null = no pin. 0 when inside or on the boundary. */
+  distanceKm: number | null;
+  inside: boolean;
+  /** Active ms from input opening to a MANUAL lock; null when never locked. */
+  timeMs: number | null;
+  lockedManually: boolean;
+  /** Round duration (the speed window). */
+  windowMs: number;
+}
+
+/**
+ * v2 geo scoring (plan §7.3):
+ *  inside  → 80 + speed (speed only with a manual lock)
+ *  outside → max(0, 80 − d / 50)   (no speed bonus)
+ *  no pin  → 0
+ */
+export function geoRoundScoreV2(input: GeoScoreInput): RoundScoreParts {
+  if (input.distanceKm === null || !Number.isFinite(input.distanceKm)) return { raw: 0, base: 0, speed: 0 };
+  if (input.inside || input.distanceKm <= 0) {
+    const speed = input.lockedManually ? speedBonus(input.timeMs, input.windowMs) : 0;
+    return { raw: BASE_MAX + speed, base: BASE_MAX, speed };
+  }
+  const base = Math.max(0, BASE_MAX - Math.max(0, input.distanceKm) / GEO_KM_PER_POINT);
+  return { raw: base, base, speed: 0 };
 }
 
 /** Phone label, e.g. "Inside the country: 100/100" or "640 km away: 87/100" (§7.4). */
@@ -151,10 +291,74 @@ export function orderGameScore(rawRoundScores: number[], plannedRounds = ORDER_R
   return ROUND_HALF_UP((GAME_MAX * sum(rawRoundScores)) / denominator);
 }
 
+/** v2: 20 per card (0/20/40/80); a perfect, manually locked order adds up to 20 for speed. */
+export const ORDER_POINTS_PER_CARD_V2 = 20;
+
+export interface OrderScoreInput {
+  correctOrder: string[];
+  answer: string[] | null;
+  timeMs: number | null;
+  lockedManually: boolean;
+  windowMs: number;
+}
+
+export interface OrderScoreV2 extends OrderScore, RoundScoreParts {}
+
+/** v2 ordering score (plan §7.4). 3 of 4 is impossible, so possible bases are 0/20/40/80. */
+export function scoreOrderV2(input: OrderScoreInput): OrderScoreV2 {
+  const s = scoreOrder(input.correctOrder, input.answer);
+  const base = s.correctPositions * ORDER_POINTS_PER_CARD_V2;
+  const perfect = s.correctPositions === input.correctOrder.length && input.correctOrder.length > 0;
+  const speed = perfect && input.lockedManually ? speedBonus(input.timeMs, input.windowMs) : 0;
+  return { ...s, raw: base + speed, base, speed };
+}
+
 export function orderResultLabel(score: OrderScore): string {
   const n = score.correctPositions;
   const cards = n === 1 ? 'card' : 'cards';
-  return `${n} ${cards} in the correct ${n === 1 ? 'position' : 'positions'}: ${score.raw}/100`;
+  return `${n} ${cards} in the correct ${n === 1 ? 'position' : 'positions'}: ${Math.round(score.raw)}/100`;
+}
+
+// ---------------------------------------------------------------------------
+// Rule set selection by frozen session version (plan §7.7)
+// ---------------------------------------------------------------------------
+
+export interface ScoringRules {
+  version: string;
+  /** Points per correctly placed card, for instruction copy. */
+  orderPointsPerCard: number;
+  race(participations: RaceParticipationV2[], registered?: number): RaceRawResultV2[];
+  geo(input: GeoScoreInput): RoundScoreParts;
+  order(input: OrderScoreInput): OrderScoreV2;
+}
+
+const RULES_V1: ScoringRules = {
+  version: SCORING_RULE_VERSION_V1,
+  orderPointsPerCard: ORDER_POINTS_PER_CARD,
+  race: (ps, registered) =>
+    scoreRace(ps.map((p) => ({ participantId: p.participantId, state: p.state, progress: p.progress, finishedAt: p.finishActiveMs })), registered)
+      .map((r, i) => ({ ...r, base: r.raw, speed: 0, finishActiveMs: ps[i]!.finishActiveMs })),
+  geo: (input) => {
+    const raw = geoRoundScore(input.distanceKm);
+    return { raw, base: raw, speed: 0 };
+  },
+  order: (input) => {
+    const s = scoreOrder(input.correctOrder, input.answer);
+    return { ...s, base: s.raw, speed: 0 };
+  },
+};
+
+const RULES_V2: ScoringRules = {
+  version: SCORING_RULE_VERSION,
+  orderPointsPerCard: ORDER_POINTS_PER_CARD_V2,
+  race: (ps) => scoreRaceV2(ps),
+  geo: geoRoundScoreV2,
+  order: scoreOrderV2,
+};
+
+/** Returns the frozen rule set for a session; unknown/missing versions fall back to v1 (the older contract). */
+export function scoringRules(version: string | null | undefined): ScoringRules {
+  return version === SCORING_RULE_VERSION ? RULES_V2 : RULES_V1;
 }
 
 /** Validates ordering content: exactly four unique options, answer uses each once (§10.3). */
@@ -274,9 +478,8 @@ export const TIEBREAK_LOCK_EPSILON_MS = 500;
 export interface TieBreakAnswer {
   participantId: string;
   correctPositions: number;
-  /** Server lock time (ms); null when the arrangement was saved but never locked. */
-  lockedAt: number | null;
-  roundStartedAt: number;
+  /** Active ms from input opening to the MANUAL lock; null when saved but never locked. */
+  timeMs: number | null;
 }
 
 /**
@@ -287,15 +490,15 @@ export interface TieBreakAnswer {
 export function tieBreakValues(answers: TieBreakAnswer[]): Map<string, number> {
   const result = new Map<string, number>();
   const perfectLocked = answers
-    .filter((a) => a.correctPositions === 4 && a.lockedAt !== null)
-    .sort((a, b) => (a.lockedAt as number) - (b.lockedAt as number));
+    .filter((a) => a.correctPositions === 4 && a.timeMs !== null)
+    .sort((a, b) => (a.timeMs as number) - (b.timeMs as number));
 
   // Bucket perfect answers by lock time with 0.5 s equality.
   const speedTier = new Map<string, number>();
   let tier = 0;
   let anchor: number | null = null;
   for (const a of perfectLocked) {
-    const t = (a.lockedAt as number) - a.roundStartedAt;
+    const t = a.timeMs as number;
     if (anchor === null || t - anchor >= TIEBREAK_LOCK_EPSILON_MS) {
       tier += 1;
       anchor = t;
