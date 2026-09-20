@@ -88,6 +88,20 @@ cards (the card background is the progress bar) ordered by player number. Headle
 1920×1080 with 50 bots: 6 × 9 cards, names ≈ 26 px, rank badges on the top 3, eliminated cards flash
 then dim (`display-50-en-*.png`, `display-50-ar-*.png` in the session scratchpad).
 
+**Revision v2.1 (20 Sep, evening, owner request: harder race, 5 ordering rounds, globe reveal).**
+Tolerance 450 / 400 / 350 ms per race with fake-out greens in races 2-3; bots calibrated to release
+inside the tolerance and lapse on ~11 % of reds. `docs/rehearsal-race-auto.sh` after the change:
+
+| Race | Finished / out | Wall time | First finish |
+|---|---|---|---|
+| 1 (450 ms) | 12 / 8 | 61 s | 54.0 s |
+| 2 (400 ms, fake-outs 15 %) | 5 / 15 | 75 s | 68.5 s |
+| 3 (350 ms, fake-outs 25 %) | 9 / 11 | 79 s | 69.5 s |
+
+Every race remains winnable (the 48 s minimum green still holds for all seeds, `transitions-and-device.test.ts`),
+finishing now takes 54-70 s instead of 54-60 s, and a real room will fall more often than these bots.
+`scoring.test.ts` covers the five-round Order It! total (3 × 93 + 40 + 0 → 638; 5 × 100 → 1000).
+
 ### Manual checks still open for v2 (need real devices)
 
 M1–M14 in `docs/redesign-plan-v2.md` §11.3: elimination takeover + vibration on iPhone/Android, 700 ms

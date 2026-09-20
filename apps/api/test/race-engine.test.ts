@@ -239,8 +239,8 @@ describe('RaceEngine v2 inputs (plan §7.2)', () => {
     hold(lenient, 'a', T0, T0 + 5_000);
     lenient.setSignal('RED', T0 + 5_000, 'MANUAL');
     lenient.input('a', true, T0 + 5_150);
-    assert.equal(lenient.tick(T0 + 5_250), null, 'the 700 ms default is still safe at 250 ms');
-    lenient.input('a', false, T0 + 5_600);
+    assert.equal(lenient.tick(T0 + 5_250), null, 'the 400 ms default is still safe at 250 ms');
+    lenient.input('a', false, T0 + 5_350);
     lenient.tick(T0 + 6_000);
     assert.equal(lenient.players.get('a')!.state, 'alive');
   });

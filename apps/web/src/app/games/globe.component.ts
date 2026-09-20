@@ -256,7 +256,33 @@ export class GlobeComponent implements AfterViewInit {
     }
     // own pin
     const pin = this.pin();
+    // Reveal: where the country really is (a ring) and, on the phone, a dashed
+    // great-circle from MY pin to it: "where did I put it, where was it?"
+    if (r?.center) {
+      if (pin && this.showYou() && this.frontSide(proj, pin.lng, pin.lat) && this.frontSide(proj, r.center.lng, r.center.lat)) {
+        ctx.beginPath();
+        path({ type: 'LineString', coordinates: [[pin.lng, pin.lat], [r.center.lng, r.center.lat]] } as never);
+        ctx.setLineDash([6 * dpr, 5 * dpr]); ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = '#F7F8FC'; ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const target = proj([r.center.lng, r.center.lat]);
+      if (target && this.frontSide(proj, r.center.lng, r.center.lat)) {
+        ctx.beginPath(); ctx.arc(target[0], target[1], 12 * dpr, 0, Math.PI * 2);
+        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#F7F8FC'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(target[0], target[1], 4 * dpr, 0, Math.PI * 2);
+        ctx.fillStyle = '#F7F8FC'; ctx.fill();
+      }
+    }
     if (pin) this.drawPin(ctx, proj, pin.lng, pin.lat, orange, dpr, 9, '');
+  }
+
+  /** True when a point is on the visible hemisphere (always true on the flat map). */
+  private frontSide(proj: GeoProjection, lng: number, lat: number): boolean {
+    if (this.flat()) return true;
+    const pt = proj([lng, lat]);
+    if (!pt) return false;
+    const inv = proj.invert?.(pt);
+    return !!inv && Math.abs(inv[0] - lng) <= 1 && Math.abs(inv[1] - lat) <= 1;
   }
 
   private drawPin(ctx: CanvasRenderingContext2D, proj: GeoProjection, lng: number, lat: number, color: string, dpr: number, radius: number, mark: string): void {

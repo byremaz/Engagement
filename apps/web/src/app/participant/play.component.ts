@@ -228,7 +228,7 @@ import { PersonalPodiumComponent } from './personal-podium.component';
                 @if (mine().result; as r) {
                   <app-round-result-card [result]="r" [gameType]="'GEO'" [roundNumber]="s.roundNumber" [roundCount]="s.roundCount" [isPractice]="s.isPractice" [distanceKm]="myDistanceKm()" [pinPlaced]="!!mine().pin" />
                 } @else if (mine().locked) {
-                  <div class="alert alert-info center" role="status">{{ 'geo.status.lockedIn' | t: { sec: lockSec() } }}</div>
+                  <div class="alert alert-info center" role="status">{{ geoLockedKey() | t: { sec: lockSec() } }}</div>
                 } @else {
                   <button class="btn btn-primary btn-lg btn-block" [disabled]="!mine().pin || s.state !== 'RoundActive' || s.paused || busy()" (click)="lockPin()">
                     📍 {{ (mine().pin ? 'play.lockPin' : 'play.tapGlobeFirst') | t }}
@@ -252,7 +252,7 @@ import { PersonalPodiumComponent } from './personal-podium.component';
                   <app-round-result-card [result]="r" [gameType]="'ORDER'" [roundNumber]="s.roundNumber" [roundCount]="s.roundCount" [isPractice]="s.isPractice" [correctCount]="orderCorrectCount()" />
                   @if (orderExplanation(); as ex) { <p class="small muted center">{{ ex }}</p> }
                 } @else if (mine().locked) {
-                  <div class="alert alert-info center" role="status">{{ 'order.status.lockedIn' | t: { sec: lockSec() } }}</div>
+                  <div class="alert alert-info center" role="status">{{ orderLockedKey() | t: { sec: lockSec() } }}</div>
                 } @else {
                   <button class="btn btn-primary btn-lg btn-block" [disabled]="s.state !== 'RoundActive' || s.paused || busy()" (click)="lockOrder()">✓ {{ 'play.lockOrder' | t }}</button>
                 }
@@ -354,9 +354,12 @@ export class PlayComponent implements OnInit, OnDestroy {
 
   /** Seconds to the manual lock, shown so the player learns the speed bonus. */
   readonly lockSec = computed(() => {
-    const t = this.mine().result?.timeMs ?? this.lockedAtMs();
+    const t = this.mine().result?.timeMs ?? this.mine().timeMs ?? this.lockedAtMs();
     return t === null || t === undefined ? '' : (t / 1000).toFixed(1);
   });
+  /** "Locked - 4.2s" when the time is known, plain "Locked" otherwise (never "- s"). */
+  readonly geoLockedKey = computed<StringKey>(() => (this.lockSec() ? 'geo.status.lockedIn' : 'geo.status.lockedNoTime'));
+  readonly orderLockedKey = computed<StringKey>(() => (this.lockSec() ? 'order.status.lockedIn' : 'order.status.lockedNoTime'));
   private readonly lockedAtMs = signal<number | null>(null);
 
   readonly pinStatusKey = computed<StringKey>(() => {
@@ -368,7 +371,7 @@ export class PlayComponent implements OnInit, OnDestroy {
       if (me.locked) return 'geo.status.waiting';
       return me.pin ? 'geo.status.acceptedTimeout' : 'geo.status.noAnswerTimeout';
     }
-    if (me.locked) return 'geo.status.lockedIn';
+    if (me.locked) return this.geoLockedKey();
     return me.pin ? 'geo.status.saved' : 'geo.status.none';
   });
 
@@ -381,7 +384,7 @@ export class PlayComponent implements OnInit, OnDestroy {
       if (me.locked) return 'order.status.waiting';
       return me.order ? 'order.status.acceptedTimeout' : 'order.status.noAnswerTimeout';
     }
-    if (me.locked) return 'order.status.lockedIn';
+    if (me.locked) return this.orderLockedKey();
     return me.saved || this.localOrder() ? 'order.status.saved' : 'order.status.none';
   });
   readonly orderExplanation = computed<string | null>(() => {

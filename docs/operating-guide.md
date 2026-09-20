@@ -139,7 +139,7 @@ Disconnection alone never eliminates a racer; a hold with no heartbeat is treate
 Scoring reference (v2, rule version 2.0.0): every round = up to 80 for the achievement + up to 20 for speed
 (speed only with a full achievement and a manual lock). Race: finish 80 + speed relative to the first finisher
 (15 s window), alive at the end 60 × progress, eliminated 0. Globe: inside 80 + speed, outside 80 − 10 per
-500 km. Order: 20 per correct card, all four + a fast lock adds speed. The red-signal tolerance is 700 ms.
+500 km. Order: 20 per correct card, all four + a fast lock adds speed. The red-signal tolerance is 450 / 400 / 350 ms for races 1-3 (500 ms in practice); races 2 and 3 include short fake-out greens. Order It! has 5 scored rounds.
 Each game is worth up to 1,000 points, tournament total up to 3,000. All scoring runs
 on the server from frozen rules (`SCORING_RULE_VERSION` in the session snapshot); clients never send
 scores. Practice never contributes points (AC-03).

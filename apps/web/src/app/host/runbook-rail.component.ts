@@ -69,7 +69,7 @@ export class RunbookRailComponent {
     return [
       { key: 'join', label: this.locale.t('host.runbook.join'), plannedMin: 0, game: null, kind: 'join' },
       ...GAME_ORDER.map<Step>((g) => ({ key: g, label: gameTitle(g, lang), plannedMin: PLAN_MIN[g], game: g, kind: 'game' })),
-      { key: 'final', label: this.locale.t('host.runbook.final'), plannedMin: 27, game: null, kind: 'final' },
+      { key: 'final', label: this.locale.t('host.runbook.final'), plannedMin: 24, game: null, kind: 'final' },
     ];
   });
 

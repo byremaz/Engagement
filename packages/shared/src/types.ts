@@ -277,6 +277,8 @@ export interface MyRoundState {
   pin: { lat: number; lng: number } | null;
   order: string[] | null;
   race: { progress: number; state: RaceLifeState } | null;
+  /** Active time at the manual lock (ms), when the answer was locked by hand. */
+  timeMs?: number | null;
   /**
    * Personal result breakdown, populated only after the host reveals.
    * The extra fields are optional so an older client can never crash on a

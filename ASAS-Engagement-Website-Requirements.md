@@ -7,6 +7,7 @@
 
 > **Revision v2 (20 Sep 2026, `docs/redesign-plan-v2.md`):** this document remains the functional foundation; the rules below were superseded by the approved redesign plan and are implemented under scoring rule version `2.0.0` (frozen per session; earlier sessions keep `1.2.0`):
 > - §6.4 red synchronization tolerance **200 ms → 700 ms** (human reaction + venue latency); §6.7 minimum Auto green **36 s → 48 s** (60 %).
+> - Revision v2.1 (20 Sep 2026, owner): the 700 ms window made the race too easy, so the tolerance is now **450 / 400 / 350 ms** for races 1–3 (500 ms in practice), reds are more frequent and races 2–3 include short fake-out greens (§6.7). Order It! runs **5 scored rounds** (game still normalised to 1000, §8.5). The globe reveal marks the country's location and a dashed line from the player's pin (§7.4).
 > - §6.8 race scoring: finished = `80 + 20 · max(0, 1 − (t − t_first) / 15 s)` (100 ms buckets, independent of N); alive at timeout = `60 · p`; eliminated = 0.
 > - §7.5 geo scoring: inside = `80 + 20 · max(0, 1 − t_lock / 25 s)` (manual lock only); outside = `max(0, 80 − d / 50)`; no pin = 0.
 > - §8.5 ordering: **20** per correct position (0/20/40/80); a perfect, manually locked order adds `20 · max(0, 1 − t_lock / 20 s)`.

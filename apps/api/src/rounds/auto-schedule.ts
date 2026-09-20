@@ -35,9 +35,20 @@ export function buildAutoSchedule(content: RaceContent, totalMs: number, seed: n
     let t = 0;
     let green = 0;
     let color: 'GREEN' | 'RED' = 'GREEN';
+    let lastWasFakeout = false;
     while (t < totalMs) {
       out.push({ color, atMs: t });
-      const len = pick(r, color === 'GREEN' ? content.autoGreenMs : content.autoRedMs);
+      let len: number;
+      if (color === 'GREEN') {
+        // Fake-out: a GREEN so short that anyone who presses on reflex is still
+        // holding when the RED lands (owner request: people must actually fall).
+        // Never two in a row, so the race stays winnable.
+        const fake: boolean = !lastWasFakeout && !!content.autoFakeoutChance && !!content.autoFakeoutGreenMs && r() < content.autoFakeoutChance;
+        len = pick(r, fake ? content.autoFakeoutGreenMs! : content.autoGreenMs);
+        lastWasFakeout = fake;
+      } else {
+        len = pick(r, content.autoRedMs);
+      }
       if (color === 'GREEN') green += Math.min(len, totalMs - t);
       t += len;
       color = color === 'GREEN' ? 'RED' : 'GREEN';

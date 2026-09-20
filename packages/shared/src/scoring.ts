@@ -62,7 +62,12 @@ export const RLGL_PRACTICE_DURATION_MS = 20_000;
  * reaction (300-450 ms) plus venue network latency; the rule "moving on RED
  * eliminates" is unchanged, only its fairness (plan decision, 20 Sep 2026).
  */
-export const RLGL_RED_TOLERANCE_MS = 700;
+/**
+ * Shared red tolerance. 400 ms sits just above human reaction (250-350 ms)
+ * plus venue latency, so a lapse of attention really does cost the race; each
+ * scored race overrides it (450 / 400 / 350 ms, content.ts).
+ */
+export const RLGL_RED_TOLERANCE_MS = 400;
 export const RLGL_HEARTBEAT_TIMEOUT_MS = 500;
 export const RLGL_SCORED_RACES = 3;
 /** Finishes within the same 0.1 s bucket share a rank (§6.8). */
@@ -260,7 +265,7 @@ export function geoResultLabel(distanceKm: number | null, raw: number): string {
 // Game 3: Order It! (spec §8.5)
 // ---------------------------------------------------------------------------
 
-export const ORDER_ROUNDS = 10;
+export const ORDER_ROUNDS = 5;
 export const ORDER_ROUND_DURATION_MS = 20_000;
 export const ORDER_TIEBREAK_DURATION_MS = 15_000;
 export const ORDER_POINTS_PER_CARD = 25;
@@ -285,7 +290,7 @@ export function scoreOrder(correctOrder: string[], answer: string[] | null): Ord
   return { correctPositions, raw: correctPositions * ORDER_POINTS_PER_CARD, positions };
 }
 
-/** Ten rounds at 100 -> 1000; integer already, but normalize defensively. */
+/** Five rounds at 100 -> 500, scaled to 1000. */
 export function orderGameScore(rawRoundScores: number[], plannedRounds = ORDER_ROUNDS): number {
   const denominator = 100 * plannedRounds;
   return ROUND_HALF_UP((GAME_MAX * sum(rawRoundScores)) / denominator);

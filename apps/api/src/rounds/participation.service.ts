@@ -125,6 +125,7 @@ export class ParticipationService {
       saved: !!row?.saved_at,
       pin: payload.pin ?? null,
       order: payload.order ?? null,
+      timeMs: row?.time_ms ?? null,
       race: raceSnap ? { progress: raceSnap.progress, state: raceSnap.state }
         : a.game_type === 'RLGL' && payload.state ? { progress: payload.progress ?? 0, state: payload.state } : null,
       result: row?.raw_score !== null && row?.raw_score !== undefined && a.revealed_at

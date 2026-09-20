@@ -32,6 +32,8 @@ interface Run {
   timers: NodeJS.Timeout[];
   heartbeat: NodeJS.Timeout | null;
   holding: Set<string>;
+  /** Red tolerance of the running race, so lapses are calibrated per race. */
+  tolerance: number;
 }
 
 const SIM_AVATAR = '🤖';
@@ -148,7 +150,8 @@ export class SimulationService implements OnModuleDestroy {
     const attempt = await this.repo.get(snap.attemptId!);
     if (!attempt || attempt.closed_at || attempt.voided_at) return;
 
-    const fresh: Run = { attemptId: attempt.id, timers: [], heartbeat: null, holding: new Set() };
+    const tolerance = (attempt.content as { redToleranceMs?: number }).redToleranceMs ?? RLGL_RED_TOLERANCE_MS;
+    const fresh: Run = { attemptId: attempt.id, timers: [], heartbeat: null, holding: new Set(), tolerance };
     this.runs.set(sessionId, fresh);
     const budget = Math.max(1500, (attempt.deadline_at?.getTime() ?? Date.now() + attempt.duration_ms) - Date.now() - 1500);
     const eligible = attempt.tiebreak_participants ? bots.filter((b) => attempt.tiebreak_participants!.includes(b.id)) : bots;
@@ -201,8 +204,10 @@ export class SimulationService implements OnModuleDestroy {
         // A race has ~12-15 reds, so the PER-RED lapse chance stays small: the weakest bot
         // (skill 0.25) lapses on ~11 % of reds and survives a race about one time in six,
         // the strongest (0.94) almost always finishes — a realistic room, not a massacre.
-        // The lapse must exceed the 700 ms shared tolerance or no bot ever dies.
-        const lapse = Math.random() < (1 - b.skill) * 0.15 ? randomInt(RLGL_RED_TOLERANCE_MS + 150, RLGL_RED_TOLERANCE_MS + 700) : randomInt(100, 450);
+        // The lapse must exceed the race's tolerance or no bot ever dies; a normal
+        // release lands inside it (humans: 250-350 ms reaction).
+        const tol = run.tolerance;
+        const lapse = Math.random() < (1 - b.skill) * 0.15 ? randomInt(tol + 150, tol + 700) : randomInt(80, Math.max(140, tol - 60));
         this.after(run, lapse, () => { run.holding.delete(b.id); this.race.input(sessionId, b.id, false); });
       }
     }

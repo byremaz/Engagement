@@ -106,7 +106,8 @@ describe('Scoring v2 (plan §7): 80 achievement + 20 speed', () => {
     assert.equal(scoreOrderV2({ correctOrder: correct, answer: ['d', 'a', 'b', 'c'], timeMs: 1_000, lockedManually: true, windowMs: W }).raw, 0);
     assert.equal(scoreOrderV2({ correctOrder: correct, answer: null, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
     const perfect7 = scoreOrderV2({ correctOrder: correct, answer: correct, timeMs: 7_000, lockedManually: true, windowMs: W }).raw;
-    assert.equal(orderGameScore([perfect7, perfect7, perfect7, perfect7, perfect7, perfect7, 40, 40, 0, 0]), 638);
+    // Five rounds: 3 perfect (93) + one half right + one zero = 319 / 500 -> 638.
+    assert.equal(orderGameScore([perfect7, perfect7, perfect7, 40, 0]), 638);
   });
 
   it('rule sets are selected by the frozen session version; v1 keeps 25 per card and its formulas', () => {
@@ -180,7 +181,7 @@ describe('Order It! (§8.5)', () => {
     assert.equal(scoreOrder(correct, ['b', 'a', 'c', 'd']).raw, 50);
     assert.equal(scoreOrder(correct, ['d', 'a', 'b', 'c']).raw, 0);
     assert.equal(scoreOrder(correct, null).raw, 0);
-    assert.equal(orderGameScore(new Array(10).fill(100)), 1000);
+    assert.equal(orderGameScore(new Array(5).fill(100)), 1000);
   });
 
   it('never presents the correct answer as the starting order', () => {

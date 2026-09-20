@@ -72,7 +72,7 @@ act SHOW_GAME_RESULTS; for s in 1 2 3 4; do act PODIUM_STEP "\"step\":$s"; done
 
 echo "== Game 3: Order It!"
 act NEXT_GAME; act SHOW_INSTRUCTIONS; act START_PRACTICE; wait_state InputLocked 40; act REVEAL_PRACTICE; act START_GAME
-rounds 10 35
+rounds 5 35
 act SHOW_GAME_RESULTS; for s in 1 2 3 4; do act PODIUM_STEP "\"step\":$s"; done
 
 echo "== Final"

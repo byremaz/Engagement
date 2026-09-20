@@ -287,7 +287,9 @@ export class RoundsService implements OnApplicationBootstrap {
       const scope = a.tiebreak_participants ? people.filter((p) => a.tiebreak_participants!.includes(p.id)) : people;
       const answers = await this.repo.answers(a.id);
       const r = this.score(s, a, answers, scope);
-      for (const e of r.entries) await this.repo.writeScore(a.id, e.participantId, a.is_practice ? 0 : e.raw, e.detail);
+      // Practice rows keep their real raw value so a reloaded phone shows the same card as the live
+      // reveal; totals exclude practice by the is_practice flag, never by a zero score.
+      for (const e of r.entries) await this.repo.writeScore(a.id, e.participantId, e.raw, e.detail);
       if (a.is_tiebreak) {
         const values = tieBreakValues(r.entries.map((e) => ({
           participantId: e.participantId,

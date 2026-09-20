@@ -36,6 +36,9 @@ export interface RaceContent {
   autoGreenMs: [number, number];
   autoRedMs: [number, number];
   redToleranceMs: number;
+  /** Chance (0..1) that a GREEN is a short fake-out; its length range in ms. */
+  autoFakeoutChance?: number;
+  autoFakeoutGreenMs?: [number, number];
   scoringRuleVersion: string;
   purpose: 'practice' | 'scored';
   deathAnimation: string;
@@ -60,6 +63,7 @@ export const RLGL_PRACTICE: RaceContent = {
   autoRedMs: [1500, 2500],
   purpose: 'practice',
   ...raceDefaults,
+  redToleranceMs: 500, // forgiving while people learn the pad
 };
 
 export const RLGL_RACES: RaceContent[] = [
@@ -68,30 +72,37 @@ export const RLGL_RACES: RaceContent[] = [
     title: 'Warm-up Run',
     scene: 'Cartoon office corridor',
     durationMs: RLGL_RACE_DURATION_MS,
-    autoGreenMs: [3000, 5000],
-    autoRedMs: [1500, 2500],
+    autoGreenMs: [2500, 4500],
+    autoRedMs: [1000, 2000],
     purpose: 'scored',
     ...raceDefaults,
+    redToleranceMs: 450,
   },
   {
     id: 'RACE-2',
     title: 'Stay Sharp',
     scene: 'Break-area courtyard',
     durationMs: RLGL_RACE_DURATION_MS,
-    autoGreenMs: [2000, 4000],
-    autoRedMs: [1200, 2500],
+    autoGreenMs: [1500, 3500],
+    autoRedMs: [900, 1800],
+    autoFakeoutChance: 0.15,
+    autoFakeoutGreenMs: [600, 900],
     purpose: 'scored',
     ...raceDefaults,
+    redToleranceMs: 400,
   },
   {
     id: 'RACE-3',
     title: 'Final Dash',
     scene: 'Finish-line corridor',
     durationMs: RLGL_RACE_DURATION_MS,
-    autoGreenMs: [1500, 3500],
-    autoRedMs: [1000, 2000],
+    autoGreenMs: [1200, 3000],
+    autoRedMs: [800, 1500],
+    autoFakeoutChance: 0.25,
+    autoFakeoutGreenMs: [600, 900],
     purpose: 'scored',
     ...raceDefaults,
+    redToleranceMs: 350,
   },
 ];
 
@@ -216,23 +227,23 @@ export const ORDER_PRACTICE: OrderContent = q(
 );
 
 export const ORDER_QUESTIONS: OrderContent[] = [
+  // Five scored rounds (owner decision, 20 Sep 2026): easy -> medium, varied domains, nothing purely numeric.
   q('SORT-01', 'Order these healthy adult animals by number of legs, fewest first.', 'Fewest legs at the top → Most legs at the bottom', ['Chicken', 'Cat', 'Ant', 'Spider'], '2, 4, 6, 8 legs.', 'Easy'),
   q('SORT-02', 'Put these Hijri months in calendar order.', EARLIEST, ['Rajab', "Sha'ban", 'Ramadan', 'Shawwal'], 'Months 7, 8, 9, 10.', 'Easy'),
-  q('SORT-03', 'Order these storage units from smallest to largest.', ASC, ['Kilobyte', 'Megabyte', 'Gigabyte', 'Terabyte'], 'Increasing storage unit size.', 'Easy-medium'),
-  q('SORT-04', 'Order these values from smallest to largest.', ASC, ['0.25', 'One third', 'One half', '0.75'], '0.25 < 1/3 < 0.5 < 0.75.', 'Medium'),
-  q('SORT-05', 'Put these months in calendar order.', EARLIEST, ['March', 'June', 'September', 'December'], 'Months 3, 6, 9, 12.', 'Easy'),
-  q('SORT-06', 'Order these distances from shortest to longest.', SHORT_LONG, ['100 metres', 'Half a kilometre', '750 metres', 'One kilometre'], '100, 500, 750, 1000 metres.', 'Medium'),
-  q('SORT-07', 'Put these letters in English alphabetical order.', 'A–Z: first letter at the top', ['B', 'G', 'S', 'W'], 'B comes before G, then S, then W.', 'Easy-medium'),
-  q('SORT-08', 'Order these planets from nearest to farthest from the Sun.', 'Nearest to the Sun at the top → Farthest at the bottom', ['Earth', 'Mars', 'Jupiter', 'Neptune'], 'The 3rd, 4th, 5th and 8th planets from the Sun.', 'Medium'),
-  // SORT-09 was structurally identical to SORT-06 (four metric magnitudes); a
-  // non-numeric sequence keeps the round bank varied (plan v2 §2, P2-7).
   q('SORT-09', "Order the stages of a butterfly's life, earliest first.", EARLIEST, ['Egg', 'Caterpillar', 'Chrysalis', 'Butterfly'], 'Egg, caterpillar, chrysalis, then butterfly.', 'Easy-medium'),
-  q('SORT-10', 'Order these durations from shortest to longest.', SHORT_LONG, ['45 seconds', 'One minute', '90 seconds', 'Two minutes'], '45, 60, 90, 120 seconds.', 'Medium'),
+  q('SORT-03', 'Order these storage units from smallest to largest.', ASC, ['Kilobyte', 'Megabyte', 'Gigabyte', 'Terabyte'], 'Increasing storage unit size.', 'Easy-medium'),
+  q('SORT-08', 'Order these planets from nearest to farthest from the Sun.', 'Nearest to the Sun at the top → Farthest at the bottom', ['Earth', 'Mars', 'Jupiter', 'Neptune'], 'The 3rd, 4th, 5th and 8th planets from the Sun.', 'Medium'),
 ];
 
 export const ORDER_SPARES: OrderContent[] = [
   q('SPARE-01', 'Put these days in order, starting from Saturday.', 'Saturday first at the top → Latest at the bottom', ['Saturday', 'Sunday', 'Tuesday', 'Thursday'], 'Saturday, Sunday, Tuesday, Thursday in weekly order.', 'Easy', 'spare'),
   q('SPARE-02', 'Order these values from smallest to largest.', ASC, ['0.1', '0.3', '0.6', '0.9'], '0.1 < 0.3 < 0.6 < 0.9.', 'Easy', 'spare'),
+  // Former scored rounds, kept as spares.
+  q('SORT-04', 'Order these values from smallest to largest.', ASC, ['0.25', 'One third', 'One half', '0.75'], '0.25 < 1/3 < 0.5 < 0.75.', 'Medium', 'spare'),
+  q('SORT-05', 'Put these months in calendar order.', EARLIEST, ['March', 'June', 'September', 'December'], 'Months 3, 6, 9, 12.', 'Easy', 'spare'),
+  q('SORT-06', 'Order these distances from shortest to longest.', SHORT_LONG, ['100 metres', 'Half a kilometre', '750 metres', 'One kilometre'], '100, 500, 750, 1000 metres.', 'Medium', 'spare'),
+  q('SORT-07', 'Put these letters in English alphabetical order.', 'A–Z: first letter at the top', ['B', 'G', 'S', 'W'], 'B comes before G, then S, then W.', 'Easy-medium', 'spare'),
+  q('SORT-10', 'Order these durations from shortest to longest.', SHORT_LONG, ['45 seconds', 'One minute', '90 seconds', 'Two minutes'], '45, 60, 90, 120 seconds.', 'Medium', 'spare'),
 ];
 
 export const ORDER_TIEBREAKS: OrderContent[] = [
@@ -323,7 +334,7 @@ export function validateContentBank(): string[] {
     }
     if (new Set(item.options.map((o) => o.label)).size !== 4) errors.push(`${item.id}: option labels must be distinct.`);
   }
-  if (ORDER_QUESTIONS.length !== 10) errors.push('Expected 10 scored ordering questions.');
+  if (ORDER_QUESTIONS.length !== 5) errors.push('Expected 5 scored ordering questions.');
   if (GEO_COUNTRIES.length !== 8) errors.push('Expected 8 scored countries.');
   if (RLGL_RACES.length !== 3) errors.push('Expected 3 scored races.');
   const codes = new Set([GEO_PRACTICE, ...GEO_COUNTRIES, ...GEO_SPARES].map((c) => c.code));
