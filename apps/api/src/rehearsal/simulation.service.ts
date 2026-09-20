@@ -198,8 +198,11 @@ export class SimulationService implements OnModuleDestroy {
         this.after(run, randomInt(200, 700), () => { run.holding.add(b.id); this.race.input(sessionId, b.id, true); });
       } else {
         // Weak bots occasionally release too late and get eliminated (demonstrates the death effect).
+        // A race has ~12-15 reds, so the PER-RED lapse chance stays small: the weakest bot
+        // (skill 0.25) lapses on ~11 % of reds and survives a race about one time in six,
+        // the strongest (0.94) almost always finishes — a realistic room, not a massacre.
         // The lapse must exceed the 700 ms shared tolerance or no bot ever dies.
-        const lapse = Math.random() > b.skill ? randomInt(RLGL_RED_TOLERANCE_MS + 150, RLGL_RED_TOLERANCE_MS + 700) : randomInt(100, 450);
+        const lapse = Math.random() < (1 - b.skill) * 0.15 ? randomInt(RLGL_RED_TOLERANCE_MS + 150, RLGL_RED_TOLERANCE_MS + 700) : randomInt(100, 450);
         this.after(run, lapse, () => { run.holding.delete(b.id); this.race.input(sessionId, b.id, false); });
       }
     }

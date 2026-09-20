@@ -151,7 +151,9 @@ export class ExportsController {
         r.id, r.game_type, r.is_tiebreak ? 'tie-break' : r.round_index + 1, r.attempt_no, r.is_practice ? 'yes' : 'no', r.is_tiebreak ? 'yes' : 'no',
         r.voided_at ? 'yes' : 'no', r.void_reason, r.content_id, r.participant_id, r.number, r.name,
         r.locked_at ? r.locked_at.toISOString() : '', r.raw_score,
-        r.time_ms ?? '', typeof r.detail?.['base'] === 'number' ? (r.detail['base'] as number) : '', typeof r.detail?.['speed'] === 'number' ? (r.detail['speed'] as number) : '',
+        // Manual lock time for GEO/ORDER; the active finish time for a race.
+        r.time_ms ?? (typeof r.detail?.['timeMs'] === 'number' ? (r.detail['timeMs'] as number) : ''),
+        typeof r.detail?.['base'] === 'number' ? (r.detail['base'] as number) : '', typeof r.detail?.['speed'] === 'number' ? (r.detail['speed'] as number) : '',
         detailSummary(r.game_type, r.detail), r.scoring_rule_version ?? '',
       ]),
     ]);

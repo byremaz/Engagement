@@ -33,7 +33,7 @@ after this date; earlier sessions keep `1.2.0` (`scoringRules()` selects by the 
 | §9 B — no stale race state in globe/order rounds | `rounds-service.test.ts` "myState() reads the race engine only for a race attempt". |
 | §9 D — tie-break rotation and void | `rounds-service.test.ts` "Tie-breaks": TIE-01 → void → TIE-02, `tie_break` cleared. |
 | §9 E/H — a round is never counted twice | `rounds-service.test.ts` "A scored round is never counted twice": `START_GAME` after a scored reveal is rejected; `gameRawTotals` sums the latest attempt only. `transitions-and-device.test.ts` "final results never skip the last game results". |
-| §9 I — restart recovery | `rounds-service.test.ts` "Restart recovery": live race voided + replayed to `Ready`; live globe round paused. Observed live on 20 Sep: three stale sessions recovered on boot (`RECOVER_RESTART` audit rows). |
+| §9 I — restart recovery | `rounds-service.test.ts` "Restart recovery": live race voided + replayed to `Ready`; live globe round paused. Observed live on 20 Sep: three stale sessions recovered on boot (`RECOVER_RESTART` audit rows); a second restart at 11:27 during a practice race logged `recovered RLGL attempt … after restart` and the session came back in `Instructions` with a fresh attempt id. |
 | §9 J — race ticks do no DB work | `rounds-service.test.ts` "Race ticks are cheap": query count unchanged over 6 ticks, ≥3 `race` events. |
 | §7 scoring v2 | `packages/shared/test/scoring.test.ts` "Scoring v2": every worked example of plan §7 (100 / 93.3 / 86.7 / 80 / 54 / 30 / 0; 97.6 / 92 / 84 / 80 / 78 / 70 / 60 / 40 / 0; 97 / 92 / 85 / 80 / 40 / 0; game totals 433 / 933 / 755 / 638); v1 still 25 per card and N-based. |
 | §7.5 active time | `packages/shared/test/timing.test.ts`: pause + resume (with its 3 s countdown) excluded; agrees with the pause-record oracle across two pauses. |
@@ -41,6 +41,38 @@ after this date; earlier sessions keep `1.2.0` (`scoringRules()` selects by the 
 | §9 E tolerance | `apps/api/test/race-engine.test.ts` "RaceEngine v2 inputs": 700 ms default, per-session tolerance honoured, active finish time excludes a pause. |
 | Design tokens | `npm run lint:tokens -w apps/web` — every `var(--…)` in `apps/web/src` is defined in `styles.css` (100 tokens). |
 | Headless rehearsal | `docs/rehearsal-race-auto.sh` (AUTO signals, 20 bots, 3 races) and `docs/rehearsal-walkthrough.sh` (all three games, podium steps, ceremony, `rounds.csv` with Time/Base/Speed) — results recorded below. |
+
+### Headless rehearsal results (20 Sep 2026, PostgreSQL, 20 bots)
+
+**Full walkthrough** (`docs/rehearsal-walkthrough.sh`, session `37c02661…`): all three games, 3 + 8 + 10
+scored rounds, per-game podium steps 1→4 after each game, ceremony steps 1→4, `rounds.csv` header carries
+`Time (ms) / Base / Speed / Detail / Rule Version`, every scored row has `Rule Version = 2.0.0`.
+
+| Check | Result |
+|---|---|
+| Races close early when nobody is still running | wall time 61 / 68 / 45 s against an 83 s deadline |
+| Race outcomes persisted and scored | 20 rows per race, finishers `base 80 + speed 20`, eliminated `0` |
+| Globe rounds (8) without any phone reload | every round 20 answers, mean 81–92, max 93–98 (inside + speed bonus) |
+| Order rounds (10) | rounds 1–6 and 10: 20 answers each, mean 55–73, max 94–98 |
+| Final standings | #1 1883 (333/906/644), #2 1794 (333/906/555), #3 1539 (0/897/642) |
+
+Two anomalies in that run are environmental, not defects, and are recorded here so they are not
+re-investigated: (1) the laptop entered Modern Standby at 10:44:38, 10:46:10, 10:46:36 and 10:46:47–11:19:28
+local time (Windows `Kernel-Power` events 506/507), which froze the API process during ORDER rounds 7–9 —
+round 7 closed 50 s after its deadline, the bots' submissions were rejected as late, and the host poll waited
+1,968 s for round 9; (2) RLGL round 3 scored 0 for everyone because that run used the previous bot tuning
+(all 20 bots eliminated) — see the race rehearsal below.
+
+**Race rehearsal with tuned bots** (`docs/rehearsal-race-auto.sh`, session `2a462a7a…`, 11:28 local, fresh API):
+
+| Race | Finished / out | Wall time (deadline 83 s) | Top 3 (raw = base + speed) | `rounds.csv` |
+|---|---|---|---|---|
+| 1 | 8 / 12 | 63 s | 100 / 99.7 / 99.6 | 20 rows, mean 39.7, finisher `Time (ms)` = 57058 |
+| 2 | 8 / 12 | 69 s | 100 / 100 / 99.7 | 20 rows, mean 39.5 |
+| 3 | 9 / 11 | 77 s | 100 / 99.5 / 99.5 | 20 rows, mean 44.0 |
+
+Game podium after step 4: #1 997, #2 994, #3 985 — three distinct ranks, no massacre and no three-way tie.
+Eliminated rows carry `state=eliminated;progress=…`, raw 0 and an empty Time column (they have no finish time).
 
 ### Manual checks still open for v2 (need real devices)
 
