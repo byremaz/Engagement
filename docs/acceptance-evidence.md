@@ -74,6 +74,20 @@ round 7 closed 50 s after its deadline, the bots' submissions were rejected as l
 Game podium after step 4: #1 997, #2 994, #3 985 — three distinct ranks, no massacre and no three-way tie.
 Eliminated rows carry `state=eliminated;progress=…`, raw 0 and an empty Time column (they have no finish time).
 
+**Phone hold bug (20 Sep, afternoon).** Report: "holding barely moves, 4 % at most". A scripted socket
+client reached 38 % in 20 s (server path healthy, ack p95 5 ms), but the real Angular UI driven in
+headless Chrome through CDP released the pad within one frame of every press (`holding:false`, 0.1 %).
+Root cause: the hold button's `effect()`s called `up()`, which reads the `holding` signal, so each press
+re-ran the effect and released itself. Fix: the release runs `untracked`. Same probe after the fix:
+mouse 0 → 11.3 % in 4 s, emulated touch 11.3 → 23.6 % in 5 s (3 %/s, the engine speed). The same
+pattern wiped the player's draft order and lock time on every snapshot in `play.component.ts`; fixed
+by tracking a value-memoised `attemptKey` instead of the snapshot object.
+
+**Display arena, every racer visible.** `race-arena.component.ts` is now a self-packing grid of bar
+cards (the card background is the progress bar) ordered by player number. Headless captures at
+1920×1080 with 50 bots: 6 × 9 cards, names ≈ 26 px, rank badges on the top 3, eliminated cards flash
+then dim (`display-50-en-*.png`, `display-50-ar-*.png` in the session scratchpad).
+
 ### Manual checks still open for v2 (need real devices)
 
 M1–M14 in `docs/redesign-plan-v2.md` §11.3: elimination takeover + vibration on iPhone/Android, 700 ms

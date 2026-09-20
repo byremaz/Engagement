@@ -23,9 +23,12 @@ function walk(dir, out = []) {
 const problems = [];
 for (const file of walk(join(root, 'src'))) {
   const text = readFileSync(file, 'utf8');
+  // Component-local custom properties (declared in the same file, e.g. `--p: 40%` or a
+  // `[style.--p]` binding) are layout plumbing, not design tokens.
+  const local = new Set([...text.matchAll(/(?:^|[\s;{"'\[.])(--[\w-]+)\s*(?::|\]|\.px|\.%)/g)].map((m) => m[1]));
   for (const m of text.matchAll(/var\(\s*(--[\w-]+)/g)) {
     const token = m[1];
-    if (!defined.has(token) && !token.startsWith('--runner') && !token.startsWith('--role-')) {
+    if (!defined.has(token) && !local.has(token) && !token.startsWith('--runner') && !token.startsWith('--role-')) {
       problems.push(`${file.replace(root, '')}: ${token}`);
     }
   }

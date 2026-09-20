@@ -1,33 +1,57 @@
 /**
- * RLGL arena for the shared display (plan §7).
+ * RLGL arena for the shared display: EVERY racer, always visible.
  *
- * Readability beats completeness at 1920x1080 from the back of a room:
- *  - ~6-8 LARGE lanes (avatar, short name, player number, progress, finish
- *    marker) instead of 40 hairlines,
- *  - ONE declared selection rule — furthest progress first — stated on screen
- *    as "Showing 8 of 40 active racers" whenever the field is truncated,
- *  - labelled Racing / Finished / Eliminated counts,
- *  - a small BOUNDED event feed,
- *  - one remaining racer gets a single large focused lane, and the field of
- *    eliminated dots collapses into a quiet aggregate.
+ * The room is full of first-time players looking for themselves on the big
+ * screen, so nobody is hidden behind a "showing 8 of 40" rule. Instead the
+ * arena is a self-packing grid of "bar cards": each card is one racer, and
+ * the card's own background IS the progress bar (the fill grows behind the
+ * name). One line per racer gives roughly twice the density of a lane with
+ * a separate track, which is what keeps names large with 50+ people:
  *
- * Two invariants this component must never break:
- *  1. Lane selection is COSMETIC. It never changes ranking, scoring or life
- *     state — those are server-authoritative and arrive in the snapshot.
- *  2. The phone remains the authoritative personal view; this screen is shared
- *     context, so it never sends a move command or advances a stage.
+ *   racers   columns × rows   card height   name size (1080p)
+ *   20       4 × 5            ~96 px        32 px
+ *   50       5 × 10           ~63 px        26 px
+ *   100      8 × 13           ~49 px        20 px
  *
- * Lane geometry is pinned `direction: ltr` so Arabic localizes the surrounding
- * UI without mirroring game meaning (plan §1).
+ * The layout is computed from the container size and the racer count
+ * (`layout()`), so the font is as large as the wall allows and shrinks only
+ * when there are more people, never before.
+ *
+ * Findability rules:
+ *  - cards are ordered by PLAYER NUMBER and never move: "player 21" is always
+ *    in the same place, so a person finds themselves once and keeps them;
+ *  - state is colour + word + icon: alive = blue fill, finished = green + 🏁,
+ *    eliminated = burgundy, dimmed, ✕ (and a 2 s flash the moment it happens);
+ *  - the three furthest racers carry a rank badge so the race still reads as
+ *    a race at a glance.
+ *
+ * Invariants kept from the previous version:
+ *  1. Everything here is COSMETIC. Ranking, scoring and life state are
+ *     server-authoritative and arrive in the snapshot.
+ *  2. The phone remains the authoritative personal view; this screen never
+ *     sends a move command or advances a stage.
+ *
+ * Card geometry is pinned `direction: ltr` so Arabic localizes the chrome
+ * without mirroring the meaning of "progress to the right" (plan §1).
  */
-import { Component, computed, input } from '@angular/core';
+import {
+  AfterViewInit, Component, DestroyRef, ElementRef, computed, effect, inject, input, signal, untracked, viewChild,
+} from '@angular/core';
 import type { RacePlayerPublic, RaceSnapshot } from '@asas/shared';
 import { TranslatePipe } from '../i18n/t.pipe';
 
-/** Large lanes rendered at once. Reduce lanes before shrinking names (§9). */
-const MAX_LANES = 8;
-/** Bounded event feed (plan §7: "a small bounded event feed"). */
-const MAX_FEED = 4;
+/** Gap between cards (px) — must match the CSS `gap`. */
+const GAP = 8;
+/** A card never grows past this: beyond it the wall is better spent on breathing room. */
+const MAX_CARD_H = 96;
+/** Width-to-height ratio below which a single-line card starts to truncate names. */
+const MIN_ASPECT = 5;
+/** How long a freshly eliminated card flashes before it settles into the dimmed state. */
+const FRESH_OUT_MS = 2000;
+/** Rank badges shown on the furthest racers. */
+const RANK_BADGES = 3;
+
+interface Layout { cols: number; cardH: number }
 
 @Component({
   selector: 'app-race-arena',
@@ -45,55 +69,46 @@ const MAX_FEED = 4;
           </span>
         </div>
       }
-      <!--
-        §7: one remaining racer is the whole story — give them a single large
-        focused lane rather than one thin row among dozens of dead dots.
-      -->
-      @if (soloFocus(); as solo) {
-        <div class="solo">
-          <p class="solo__cap">{{ 'display.lastRacer' | t }}</p>
-          <div class="solo__row">
-            <span class="solo__avatar" aria-hidden="true">{{ solo.avatar }}</span>
-            <bdi class="solo__name">{{ solo.name }}</bdi>
-            <span class="solo__num num">{{ 'rlgl.player' | t: { number: solo.number } }}</span>
-          </div>
-          <div class="solo__track" aria-hidden="true">
-            <div class="solo__fill" [style.width.%]="clamp(solo.progress)"></div>
-            <span class="solo__flag">{{ 'display.finishLine' | t }}</span>
-          </div>
-          <p class="solo__pct num">{{ 'display.trackPct' | t: { n: round(solo.progress) } }}</p>
-        </div>
-      } @else {
-        <!-- The selection rule is DECLARED, not left for the room to infer. -->
-        @if (hiddenLanes() > 0) {
-          <p class="rule num">
-            {{ 'display.showingOf' | t: { shown: lanes().length, total: activePlayers().length } }}
-            <span class="rule__how">{{ 'display.laneRule' | t }}</span>
-          </p>
-        }
 
-        <div class="lanes">
-          @for (p of lanes(); track p.participantId) {
-            <div class="lane" [class.lane--done]="p.state === 'finished'">
-              <div class="lane__id">
-                <span class="lane__avatar" aria-hidden="true">{{ p.avatar }}</span>
-                <bdi class="lane__name">{{ p.name }}</bdi>
-                <span class="lane__num num">{{ 'rlgl.player' | t: { number: p.number } }}</span>
-              </div>
-              <div class="lane__track">
-                <div class="lane__fill" [style.width.%]="clamp(p.progress)"></div>
-                <div class="lane__runner" [style.inset-inline-start]="posCss(p.progress)" aria-hidden="true">
-                  {{ p.avatar }}
-                </div>
-                <span class="lane__flag" aria-hidden="true">🏁</span>
-              </div>
-              <span class="lane__pct num">{{ round(p.progress) }}%</span>
-            </div>
-          } @empty {
-            <p class="empty">{{ 'display.noRacers' | t }}</p>
-          }
-        </div>
+      @if (alive() === 1 && players().length > 1) {
+        <p class="solo-cap">{{ 'display.lastRacer' | t }}</p>
       }
+
+      <!-- Self-packing grid: every racer, ordered by player number, sized from the wall. -->
+      <div
+        #grid
+        class="grid"
+        [style.--cols]="layout().cols"
+        [style.--card-h.px]="layout().cardH"
+      >
+        @for (p of cards(); track p.participantId) {
+          <div
+            class="card"
+            [class.card--alive]="p.state === 'alive'"
+            [class.card--done]="p.state === 'finished'"
+            [class.card--out]="p.state === 'eliminated'"
+            [class.card--fresh-out]="freshOut().has(p.participantId)"
+            [class.card--solo]="alive() === 1 && p.state === 'alive'"
+            [style.--p.%]="clamp(p.progress)"
+          >
+            @if (rankOf(p.participantId); as r) { <span class="card__rank num" aria-hidden="true">{{ r }}</span> }
+            <span class="card__avatar" aria-hidden="true">{{ p.avatar }}</span>
+            <span class="card__who">
+              <bdi class="card__name">{{ p.name }}</bdi>
+              <span class="card__num num">#{{ p.number }}</span>
+            </span>
+            <span class="card__end num">
+              @switch (p.state) {
+                @case ('finished') { <span class="card__flag" aria-hidden="true">🏁</span> }
+                @case ('eliminated') { <span class="card__x" aria-hidden="true">✕</span> }
+                @default { {{ round(p.progress) }}% }
+              }
+            </span>
+          </div>
+        } @empty {
+          <p class="empty">{{ 'display.noRacers' | t }}</p>
+        }
+      </div>
 
       <!-- Labelled counts: a number alone never carries the meaning (§9). -->
       <div class="counts">
@@ -101,27 +116,12 @@ const MAX_FEED = 4;
         <span class="chip done num">{{ 'host.race.finished' | t }} {{ finished() }}</span>
         <span class="chip out num">{{ 'host.race.eliminated' | t }} {{ eliminated() }}</span>
       </div>
-
-      <!--
-        §4: simultaneous deaths aggregate into a bounded summary instead of
-        queued blocking animations.
-      -->
-      <div class="feed">
-        <span class="cap">{{ 'display.eliminatedFeed' | t }}</span>
-        @for (n of feedNames(); track $index) {
-          <bdi class="out-name">{{ n }}</bdi>
-        } @empty {
-          <span class="muted">{{ 'display.feedEmpty' | t }}</span>
-        }
-        @if (feedOverflow() > 0) {
-          <span class="out-more num">{{ 'display.andMore' | t: { count: feedOverflow() } }}</span>
-        }
-      </div>
     </div>
   `,
   styles: [`
     :host { display: block; min-height: 0; position: relative; }
-    .arena-wrap { display: flex; flex-direction: column; gap: 12px; min-height: 0; height: 100%; }
+    .arena-wrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
+
     .burst {
       position: absolute; inset-inline-start: 50%; inset-block-start: 18%; transform: translateX(-50%); z-index: 5;
       display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -132,66 +132,74 @@ const MAX_FEED = 4;
     .burst__n { font-size: clamp(36px, 4vw, 60px); font-weight: 900; line-height: 1; }
     .burst__names { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; font-size: 1.1rem; font-weight: 700; }
 
-    .rule { margin: 0; color: var(--elm-light-blue); font-size: 1.05rem; text-align: center; }
-    .rule__how { opacity: .85; margin-inline-start: 8px; }
+    .solo-cap { margin: 0; text-align: center; font-size: 1.4rem; color: var(--elm-peach); font-weight: 800; }
 
     /* Game geometry stays physically LTR in both languages (plan §1). */
-    .lanes {
+    .grid {
       direction: ltr;
       flex: 1; min-height: 0;
-      display: flex; flex-direction: column; gap: 8px;
-      background: var(--elm-dark-indigo);
-      border-radius: 14px; padding: 12px 16px; overflow: hidden;
-    }
-    .lane {
       display: grid;
-      grid-template-columns: minmax(200px, 22%) 1fr auto;
-      align-items: center; gap: 14px;
-      flex: 1; min-height: 0;
+      grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+      grid-auto-rows: var(--card-h, 64px);
+      align-content: start;
+      gap: 8px;
+      overflow: hidden;
     }
-    .lane__id { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .lane__avatar { font-size: 34px; }
-    /* Display names 28-36px (§9): essential, so never shrunk to fit. */
-    .lane__name {
-      font-size: clamp(22px, 1.6vw, 30px); font-weight: 800; color: #fff;
+
+    /*
+     * The card IS the bar: its background is a hard-stop gradient at --p, so
+     * the fill grows behind the name and nothing else needs space.
+     */
+    .card {
+      --fill: var(--elm-royal-blue);
+      --name-size: clamp(16px, calc(var(--card-h, 64px) * 0.42), 32px);
+      position: relative;
+      display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+      padding: 0 12px 0 8px;
+      border-radius: 12px;
+      background: linear-gradient(to right, var(--fill) var(--p, 0%), var(--elm-navy) var(--p, 0%));
+      color: #fff;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
+      transition: background 150ms linear;
+      overflow: hidden;
+    }
+    .card--alive { box-shadow: inset 0 0 0 2px rgba(189, 201, 233, 0.35); }
+    .card--done { --fill: var(--game-go); box-shadow: inset 0 0 0 3px var(--elm-almost-white); }
+    .card--out { --fill: var(--elm-burgundy); opacity: 0.55; filter: saturate(0.6); }
+    .card--out .card__name { text-decoration: line-through; text-decoration-thickness: 2px; }
+    .card--fresh-out { opacity: 1; filter: none; animation: fresh-out 600ms ease-out 3; z-index: 1; }
+    .card--solo { box-shadow: inset 0 0 0 4px var(--elm-peach); animation: pulse-soft 1.2s ease-in-out infinite; }
+
+    .card__avatar {
+      font-size: calc(var(--card-h, 64px) * 0.5); line-height: 1;
+      width: calc(var(--card-h, 64px) * 0.7); height: calc(var(--card-h, 64px) * 0.7);
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%; background: var(--elm-peach); border: 2px solid var(--elm-navy);
+      flex: none;
+    }
+    .card__who { display: flex; align-items: baseline; gap: 8px; min-width: 0; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+    /* The name is the essential element: as large as the wall allows, never shrunk to fit a bar. */
+    .card__name {
+      font-size: var(--name-size); font-weight: 800; line-height: 1.1;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate;
     }
-    .lane__num { font-size: 1rem; color: var(--elm-light-blue); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .card__num { font-size: calc(var(--name-size) * 0.62); color: var(--elm-light-blue); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .card__end {
+      font-size: calc(var(--name-size) * 0.85); font-weight: 800; color: var(--elm-peach);
+      font-variant-numeric: tabular-nums; min-width: 3.2ch; text-align: right; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    }
+    .card__flag { font-size: calc(var(--name-size) * 0.95); }
+    .card__x { color: var(--elm-almost-white); }
+    .card__rank {
+      position: absolute; inset-block-start: -3px; inset-inline-start: -3px;
+      width: calc(var(--name-size) * 1.15); height: calc(var(--name-size) * 1.15);
+      border-radius: 50%; background: var(--elm-peach); color: var(--elm-navy);
+      font-size: calc(var(--name-size) * 0.7); font-weight: 900;
+      display: flex; align-items: center; justify-content: center;
+      border: 2px solid var(--elm-navy); z-index: 1;
+    }
 
-    .lane__track {
-      position: relative; height: 100%; min-height: 46px;
-      background: var(--elm-navy); border-radius: 10px; overflow: hidden;
-    }
-    .lane__fill { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--elm-royal-blue); }
-    .lane__runner {
-      --runner: 40px;
-      position: absolute; inset-block-start: 50%;
-      width: var(--runner); height: var(--runner);
-      margin-inline-start: calc(var(--runner) / -2); transform: translateY(-50%);
-      border-radius: 50%; background: var(--elm-peach); border: 3px solid var(--elm-navy);
-      display: flex; align-items: center; justify-content: center; font-size: 22px;
-      transition: inset-inline-start 150ms linear;
-    }
-    .lane__flag { position: absolute; inset-inline-end: 6px; inset-block-start: 50%; transform: translateY(-50%); font-size: 26px; opacity: .8; }
-    .lane--done .lane__fill { background: var(--game-go); }
-    .lane__pct { font-size: 1.3rem; font-weight: 800; color: var(--elm-peach); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: end; }
-    .empty { margin: auto; color: var(--elm-light-blue); font-size: 1.2rem; }
-
-    /* One-survivor focus. */
-    .solo {
-      direction: ltr;
-      flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px;
-      background: var(--elm-dark-indigo); border-radius: 14px; padding: 24px 28px;
-    }
-    .solo__cap { margin: 0; text-align: center; font-size: 1.4rem; color: var(--elm-peach); font-weight: 800; }
-    .solo__row { display: flex; align-items: center; justify-content: center; gap: 16px; }
-    .solo__avatar { font-size: 72px; }
-    .solo__name { font-size: clamp(32px, 3vw, 52px); font-weight: 900; color: #fff; unicode-bidi: isolate; }
-    .solo__num { font-size: 1.3rem; color: var(--elm-light-blue); font-variant-numeric: tabular-nums; }
-    .solo__track { position: relative; height: 64px; background: var(--elm-navy); border-radius: 12px; overflow: hidden; }
-    .solo__fill { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--elm-royal-blue); transition: width 150ms linear; }
-    .solo__flag { position: absolute; inset-inline-end: 12px; inset-block-start: 50%; transform: translateY(-50%); color: #fff; font-weight: 700; }
-    .solo__pct { margin: 0; text-align: center; font-size: 2rem; font-weight: 800; color: var(--elm-peach); font-variant-numeric: tabular-nums; }
+    .empty { grid-column: 1 / -1; margin: auto; color: var(--elm-light-blue); font-size: 1.2rem; text-align: center; }
 
     .counts { display: flex; gap: 12px; justify-content: center; }
     .chip {
@@ -202,26 +210,29 @@ const MAX_FEED = 4;
     .chip.done { background: var(--elm-cyan); color: var(--elm-navy); }
     .chip.out { background: var(--elm-burgundy); color: #fff; }
 
-    .cap { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--elm-light-blue); }
-    .feed { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 30px; }
-    .out-name {
-      font-size: 1rem; color: var(--elm-almost-white);
-      background: rgba(161, 43, 42, 0.35); border-radius: 8px; padding: 4px 12px;
-      max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      unicode-bidi: isolate;
+    @keyframes fresh-out {
+      0% { transform: scale(1); box-shadow: inset 0 0 0 4px var(--elm-almost-white); }
+      50% { transform: scale(1.06); box-shadow: inset 0 0 0 4px var(--elm-almost-white), 0 0 24px var(--elm-burgundy); }
+      100% { transform: scale(1); box-shadow: inset 0 0 0 4px var(--elm-almost-white); }
     }
-    .out-more { font-size: 1rem; color: var(--elm-light-blue); font-variant-numeric: tabular-nums; }
-    .muted { color: var(--elm-light-blue); font-size: 0.95rem; }
 
     @media (prefers-reduced-motion: reduce) {
-      .lane__runner, .solo__fill { transition: none; }
+      .card { transition: none; }
+      .card--fresh-out { animation: none; box-shadow: inset 0 0 0 4px var(--elm-almost-white); }
+      .card--solo { animation: none; }
     }
   `],
 })
-export class RaceArenaComponent {
+export class RaceArenaComponent implements AfterViewInit {
   readonly race = input<RaceSnapshot | null>(null);
   /** Aggregated elimination burst (names + count), cleared by the parent after ~2 s. */
   readonly burst = input<{ names: string[]; count: number } | null>(null);
+
+  private readonly gridEl = viewChild.required<ElementRef<HTMLElement>>('grid');
+  private readonly destroyRef = inject(DestroyRef);
+
+  /** Measured grid box; the layout is derived from it and the racer count. */
+  private readonly box = signal<{ w: number; h: number }>({ w: 1600, h: 640 });
 
   readonly players = computed<RacePlayerPublic[]>(() => this.race()?.players ?? []);
 
@@ -229,49 +240,71 @@ export class RaceArenaComponent {
   readonly finished = computed(() => this.players().filter((p) => p.state === 'finished').length);
   readonly eliminated = computed(() => this.players().filter((p) => p.state === 'eliminated').length);
 
-  /**
-   * Eliminated players leave the lanes entirely: a field of dead dots is the
-   * noise §7 asks us to collapse into the quiet aggregate chip instead.
-   */
-  readonly activePlayers = computed(() => this.players().filter((p) => p.state !== 'eliminated'));
+  /** Stable order by player number: a card never moves, so people find themselves once. */
+  readonly cards = computed(() => this.players().slice().sort((a, b) => a.number - b.number));
 
   /**
-   * THE declared selection rule: furthest progress first. Cosmetic only — it
-   * never changes ranking or state, which stay server-authoritative.
+   * Rank badges for the furthest racers (cosmetic). Finished racers rank
+   * first, then alive ones by progress; eliminated racers never rank.
    */
-  readonly lanes = computed(() =>
-    this.activePlayers()
-      .slice()
-      .sort((a, b) => b.progress - a.progress)
-      .slice(0, MAX_LANES),
-  );
-
-  readonly hiddenLanes = computed(() => Math.max(0, this.activePlayers().length - MAX_LANES));
-
-  /** Exactly one racer left still running: switch to the focused lane. */
-  readonly soloFocus = computed<RacePlayerPublic | null>(() => {
-    const stillRacing = this.players().filter((p) => p.state === 'alive');
-    return stillRacing.length === 1 ? stillRacing[0] : null;
+  private readonly ranks = computed(() => {
+    const ranked = this.players()
+      .filter((p) => p.state !== 'eliminated' && p.progress > 0)
+      .sort((a, b) => (Number(b.state === 'finished') - Number(a.state === 'finished')) || (b.progress - a.progress) || (a.number - b.number))
+      .slice(0, RANK_BADGES);
+    return new Map(ranked.map((p, i) => [p.participantId, i + 1]));
   });
 
-  /** Newest eliminations first, hard-capped; the remainder becomes a count. */
-  readonly feedNames = computed(() => {
-    const feed = this.race()?.eliminationsFeed ?? [];
-    const names: string[] = [];
-    for (let i = feed.length - 1; i >= 0 && names.length < MAX_FEED; i--) {
-      for (const n of feed[i].names) {
-        if (names.length < MAX_FEED) names.push(n);
-      }
+  /** Racers eliminated within the last two seconds: they flash before dimming. */
+  readonly freshOut = signal<Set<string>>(new Set());
+  private readonly seenOut = new Set<string>();
+  private readonly freshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Pack N single-line cards into the measured box so the card (and so the
+   * name) is as large as possible: for each column count, the card height is
+   * limited by the rows that must fit and by the width (a card narrower than
+   * MIN_ASPECT × height would truncate names). Pick the best.
+   */
+  readonly layout = computed<Layout>(() => {
+    const n = Math.max(1, this.players().length);
+    const { w, h } = this.box();
+    let best: Layout = { cols: 1, cardH: 48 };
+    let bestSize = -1;
+    for (let cols = 1; cols <= 12; cols++) {
+      const rows = Math.ceil(n / cols);
+      const cardH = Math.min(MAX_CARD_H, (h - GAP * (rows - 1)) / rows);
+      const cardW = (w - GAP * (cols - 1)) / cols;
+      const size = Math.min(cardH, cardW / MIN_ASPECT);
+      if (size > bestSize + 0.5) { bestSize = size; best = { cols, cardH: Math.max(36, Math.floor(cardH)) }; }
     }
-    return names;
+    return best;
   });
 
-  /** Aggregated overflow so simultaneous deaths never queue animations (§4). */
-  readonly feedOverflow = computed(() => {
-    const feed = this.race()?.eliminationsFeed ?? [];
-    const total = feed.reduce((sum, e) => sum + e.names.length, 0);
-    return Math.max(0, total - this.feedNames().length);
-  });
+  constructor() {
+    effect(() => {
+      const players = this.players();
+      untracked(() => this.trackEliminations(players));
+    });
+  }
+
+  ngAfterViewInit(): void {
+    const el = this.gridEl().nativeElement;
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r && r.width > 0 && r.height > 0) this.box.set({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    this.destroyRef.onDestroy(() => {
+      ro.disconnect();
+      for (const t of this.freshTimers.values()) clearTimeout(t);
+    });
+  }
+
+  rankOf(id: string): number | null {
+    return this.ranks().get(id) ?? null;
+  }
 
   round(progress: number): number {
     return Math.round(progress);
@@ -281,8 +314,30 @@ export class RaceArenaComponent {
     return Math.min(100, Math.max(0, progress));
   }
 
-  /** Clamp inside the lane: the avatar is never clipped at either end. */
-  posCss(progress: number): string {
-    return `calc(var(--runner) / 2 + (100% - var(--runner)) * ${this.clamp(progress) / 100})`;
+  /**
+   * Flash a card the moment its racer is eliminated, then let it settle. A
+   * page reload never replays flashes (everything already eliminated at the
+   * first snapshot is seeded as "seen"), matching the phone's behaviour.
+   */
+  private trackEliminations(players: RacePlayerPublic[]): void {
+    if (players.length === 0) return;
+    const firstSnapshot = !this.primed;
+    this.primed = true;
+    const ids = new Set(players.map((p) => p.participantId));
+    for (const id of [...this.seenOut]) if (!ids.has(id)) this.seenOut.delete(id); // new attempt: forget
+    for (const p of players) {
+      if (p.state !== 'eliminated') { this.seenOut.delete(p.participantId); continue; }
+      if (this.seenOut.has(p.participantId)) continue;
+      this.seenOut.add(p.participantId);
+      if (firstSnapshot) continue;
+      this.freshOut.update((s) => new Set(s).add(p.participantId));
+      const prev = this.freshTimers.get(p.participantId);
+      if (prev) clearTimeout(prev);
+      this.freshTimers.set(p.participantId, setTimeout(() => {
+        this.freshTimers.delete(p.participantId);
+        this.freshOut.update((s) => { const next = new Set(s); next.delete(p.participantId); return next; });
+      }, FRESH_OUT_MS));
+    }
   }
+  private primed = false;
 }

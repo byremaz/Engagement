@@ -144,7 +144,8 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
 
                 @switch (rp.type) {
                   @case ('RLGL') {
-                    @if (!s.paused) {
+                    <!-- The signal is only meaningful while the race runs: a closed round shows no GO/STOP. -->
+                    @if (!s.paused && s.state === 'RoundActive') {
                       <div class="signal huge" [class.signal-green]="signal() === 'GREEN'" [class.signal-red]="signal() === 'RED'">
                         <span aria-hidden="true">{{ signal() === 'GREEN' ? '▶' : '■' }}</span>
                         {{ (signal() === 'GREEN' ? 'signal.green.go' : 'signal.red.stop') | t }}

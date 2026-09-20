@@ -5,7 +5,7 @@
  * "Answer locked" only after server acknowledgment. Phones are silent by
  * default (§14): vibration is their channel.
  */
-import { Component, computed, effect, inject, OnDestroy, OnInit, signal } from '@angular/core';
+import { Component, computed, effect, inject, OnDestroy, OnInit, signal, untracked } from '@angular/core';
 import { Router } from '@angular/router';
 import { NgTemplateOutlet } from '@angular/common';
 import type { SignalColor, StandingRow } from '@asas/shared';
@@ -325,6 +325,9 @@ export class PlayComponent implements OnInit, OnDestroy {
   readonly busy = signal(false);
   readonly err = signal<string | null>(null);
   private readonly localOrder = signal<string[] | null>(null);
+  /** Attempt id and stage as VALUES, so effects re-run only when they actually change. */
+  private readonly attemptKey = computed(() => this.snap()?.attemptId ?? null);
+  private readonly stageName = computed(() => this.snap()?.state ?? null);
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly gameName = computed(() => {
@@ -453,13 +456,17 @@ export class PlayComponent implements OnInit, OnDestroy {
   });
 
   constructor() {
-    // New attempt → clear local draft state; reset readiness when instructions reopen.
+    // New attempt → clear local draft state. Tracked through `attemptKey` (a
+    // value-memoised computed), NOT through `snap()`: every snapshot and 5 Hz
+    // race tick replaces the snapshot object, and tracking it here wiped the
+    // player's in-progress order and lock time whenever anyone else answered.
     effect(() => {
-      const s = this.snap();
-      s?.attemptId;
-      this.localOrder.set(null);
-      this.lockedAtMs.set(null);
-      if (s?.state !== 'Instructions') this.readyLocal.set(false);
+      this.attemptKey();
+      untracked(() => { this.localOrder.set(null); this.lockedAtMs.set(null); });
+    });
+    // Readiness resets when the stage leaves the instructions.
+    effect(() => {
+      if (this.stageName() !== 'Instructions') untracked(() => this.readyLocal.set(false));
     });
     // Remember the last published total so the header never drops to 0 mid-game.
     effect(() => {

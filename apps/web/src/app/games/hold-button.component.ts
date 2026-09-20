@@ -17,7 +17,7 @@
  *
  * Every string comes from the i18n layer; nothing here is hard-coded English.
  */
-import { Component, DestroyRef, HostListener, effect, inject, input, output, signal } from '@angular/core';
+import { Component, DestroyRef, HostListener, effect, inject, input, output, signal, untracked } from '@angular/core';
 import type { SignalColor } from '@asas/shared';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
@@ -88,15 +88,20 @@ export class HoldButtonComponent {
   constructor() {
     inject(DestroyRef).onDestroy(() => this.stop());
 
+    // Each effect below releases the hold in reaction to ONE signal. The release
+    // itself runs `untracked`: `up()` reads `holding`, and a tracked read would
+    // re-run the effect on every press and release it again immediately — the
+    // "I hold but barely move" bug (progress stalled at a few percent).
+
     // A language switch re-renders the pad under the player's thumb; release so
     // the hold is deliberate afterwards rather than carried across the change.
-    effect(() => { this.locale.lang(); this.up(); });
+    effect(() => { this.locale.lang(); untracked(() => this.up()); });
 
     // An overlay covering the pad must not leave a move command running.
-    effect(() => { if (this.overlayOpen()) this.up(); });
+    effect(() => { if (this.overlayOpen()) untracked(() => this.up()); });
 
     // Losing eligibility (death, pause, lock) always ends the hold.
-    effect(() => { if (!this.enabled()) this.up(); });
+    effect(() => { if (!this.enabled()) untracked(() => this.up()); });
   }
 
   /** The label always names the CORRECT action for the current signal. */
