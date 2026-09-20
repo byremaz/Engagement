@@ -11,22 +11,11 @@
   </head>
   <body>
     <!--
-      The router uses hash locations (#/host, #/display, #/join/CODE) so the app can be
-      served as static files without server rewrite rules. Someone typing a clean path
-      such as /host would otherwise be served index.html with an empty hash and land on
-      the participant join screen. Translate the path into its hash form before Angular
-      bootstraps so both URL shapes work.
+      No inline script here on purpose: the API serves this bundle with a
+      `script-src 'self'` policy, which refuses inline code. The clean-path to
+      hash-route translation that used to live here now runs in main.ts, inside
+      the bundle. See apps/web/src/main.ts and apps/api/src/main.ts.
     -->
-    <script>
-      (function () {
-        var base = new URL(document.baseURI).pathname;
-        var path = location.pathname;
-        if (location.hash || path.indexOf(base) !== 0) return;
-        var rest = path.slice(base.length).replace(/^\/+/, '');
-        if (!rest || rest.indexOf('.') !== -1) return;
-        location.replace(base + '#/' + rest + location.search);
-      })();
-    </script>
     <app-root></app-root>
   </body>
 </html>

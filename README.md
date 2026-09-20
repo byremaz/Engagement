@@ -91,6 +91,7 @@ npm run build                 # shared -> api -> web production build
 | Document | Contents |
 |---|---|
 | `docs/operating-guide.md` | Host operating guide: setup, display/audio test, joining, device capture, explanations, signal modes, transitions, recovery, export (§16 deliverable 5). |
+| `docs/deploy-render.md` | Deploying to Render: one web service serves the API and the bundle from a single origin, region and latency, free-plan limits to fix before event day. |
 | `docs/acceptance-evidence.md` | Evidence per acceptance criterion, data sources, deviations and known operational limitations (§16 deliverables 6-7). |
 
 ## Event-day checklist
