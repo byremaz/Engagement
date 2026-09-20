@@ -2,14 +2,17 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { HostAction, HostActionPayload, ParticipantHostView, SessionSnapshot, SessionState, SignalMode } from '@asas/shared';
+import type { HostAction, HostActionPayload, Lang, ParticipantHostView, SessionSnapshot, SessionState, SignalMode } from '@asas/shared';
 
 export interface PublicSession {
   id: string; joinCode: string; title: string; state: SessionState; joinOpen: boolean; paused: boolean; createdAt: string;
+  /** Host-chosen default language for new phones (plan v2 §4.3). */
+  defaultParticipantLang?: Lang;
 }
 export interface HostSession extends PublicSession {
   capacity: number; gameIndex: number; roundIndex: number; ceremonyStep: number; signalMode: SignalMode;
   contentFrozen: boolean; eventStartedAt: string | null; closedAt: string | null;
+  displayLang?: Lang; defaultParticipantLang?: Lang;
 }
 export interface JoinResponse {
   participant: { id: string; number: number; name: string; avatar: string; displayName: string };
@@ -61,6 +64,10 @@ export class ApiService {
   }
   setSignalMode(id: string, mode: SignalMode) {
     return firstValueFrom(this.http.patch<HostSession>(`/v1/sessions/${id}/signal-mode`, { mode }));
+  }
+  /** Shared-display language and default language for new phones (plan v2 §4.3). */
+  setLanguages(id: string, langs: { displayLang?: Lang; defaultParticipantLang?: Lang }) {
+    return firstValueFrom(this.http.patch<SessionSnapshot>(`/v1/sessions/${id}/languages`, langs));
   }
   displayToken(id: string) {
     return firstValueFrom(this.http.post<{ token: string }>(`/v1/sessions/${id}/display-tokens`, {}));

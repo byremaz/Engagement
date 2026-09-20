@@ -41,11 +41,8 @@ export const AR_PART2 = {
   'play.finished': 'ترتيبك النهائي #{rank}',
   'play.podium': 'ترتيبك النهائي #{rank} — على المنصة! 🎉',
   'play.thanks': 'شكرًا لمشاركتك',
-  'play.eliminated.title': 'خرجت من هذه الجولة',
-  'play.eliminated.body': '0 نقطة في هذه الجولة. ترجع تلقائيًا في الجولة القادمة — ونقاطك السابقة محفوظة.',
-  'play.finishedRace.title': 'وصلت خط النهاية!',
   'play.scoring.note':
-    'طريقة الحساب: كل لعبة حتى 1,000 نقطة (3,000 إجمالًا). امش… وقف!: الوصول 80–100، انتهاء الوقت يحفظ 80% من تقدّمك، والخروج = 0. وين الدولة؟: داخل الدولة = 100، وكل 500 كم تُخصم 10. رتّبها!: 25 لكل بطاقة في موضعها الصحيح.',
+    'طريقة الحساب: كل جولة = 100 نقطة — حتى 80 للإنجاز وحتى 20 للسرعة (السرعة تُحتسب فقط مع الإنجاز الكامل). كل لعبة حتى 1,000 نقطة، و3,000 إجمالًا.',
 
   // ------------------------------------------------------------ waiting card
   'wait.title.Lobby': 'بانتظار البداية',
@@ -84,8 +81,15 @@ export const AR_PART2 = {
   'result.outcome.order.correct': '{n} بطاقات في مواضعها الصحيحة',
   'result.outcome.order.perfect': 'ترتيب كامل الصحّة!',
   'result.outcome.rlgl.finished': 'وصلت خط النهاية',
-  'result.outcome.rlgl.eliminated': 'خرجت — 0 نقطة في هذه الجولة',
-  'result.outcome.rlgl.timeout': 'انتهى الوقت — حفظت 80% من تقدّمك',
-  'result.correctAnswer': 'الإجابة الصحيحة',
-  'result.yourAnswer': 'إجابتك',
+  'result.outcome.rlgl.finishedRank': 'وصلت للنهاية — رقم {rank} في القاعة',
+  'result.outcome.rlgl.eliminated': 'خرجت — 0 نقطة في هذا السباق',
+  'result.outcome.rlgl.timeout': 'انتهى الوقت — بقيت في السباق',
+  'result.base': 'الإنجاز',
+  'result.speed': 'مكافأة السرعة ({sec} ث)',
+  'result.speedNone': 'مكافأة السرعة',
+  'result.gameAfter': 'نقاط اللعبة (بعد {n} من {total})',
+  'result.gameRank': 'ترتيبك في هذه اللعبة',
+  'result.provisional': 'ترتيبك الآن (مؤقت)',
+  'result.next.round': 'التالي: الجولة {n} من {total} — بانتظار المقدّم',
+  'result.next.gameResults': 'التالي: نتائج اللعبة',
 } as const;

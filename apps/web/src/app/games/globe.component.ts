@@ -14,7 +14,7 @@ import type { Topology, GeometryCollection } from 'topojson-specification';
 export interface RevealHighlight {
   /** GeoJSON MultiPolygon coordinates of the target country. */
   geometry: { type: 'MultiPolygon'; coordinates: number[][][][] } | null;
-  center: { lat: number; lng: number } | null;
+  center: { lat: number; lng: number; zoom?: number } | null;
   /** Other players' pins to draw after reveal. */
   pins: { lat: number; lng: number; correct: boolean }[];
 }
@@ -40,6 +40,10 @@ function loadLand(): Promise<Land> {
       <canvas #canvas
         (pointerdown)="down($event)" (pointermove)="move($event)" (pointerup)="up($event)" (pointercancel)="cancel()"
         (wheel)="wheel($event)" role="img" [attr.aria-label]="(pin() ? 'geo.aria.pinned' : 'geo.aria.noPin') | t"></canvas>
+      @if (reveal()) {
+        <!-- Reveal legend: the dots mean nothing without it (plan v2 §5.8). -->
+        <p class="hint small legend">{{ (showYou() ? 'geo.legend' : 'display.legendRoom') | t }}</p>
+      }
       @if (interactive()) {
         <!-- Hint sits top-start so it never covers the likely target or the pin (plan §5). -->
         <p class="hint small">{{ 'geo.rotateHint' | t }}</p>
@@ -63,6 +67,7 @@ function loadLand(): Promise<Land> {
     }
     canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
     .hint { position: absolute; top: 8px; left: 8px; right: 8px; margin: 0; color: var(--elm-pale-blue); background: rgba(5,29,73,.66); border-radius: 8px; padding: 4px 8px; pointer-events: none; text-align: center; }
+    .legend { top: auto; bottom: 8px; font-weight: 700; }
     .controls { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .controls .btn { min-height: 44px; padding: 6px 12px; font-size: 15px; background: var(--elm-almost-white); }
     @media (prefers-reduced-motion: reduce) { .hint { transition: none; } }
@@ -74,6 +79,8 @@ export class GlobeComponent implements AfterViewInit {
   readonly pin = input<{ lat: number; lng: number } | null>(null);
   readonly reveal = input<RevealHighlight | null>(null);
   readonly initialScale = input(1);
+  /** Phone: the legend mentions "you"; the shared display has no "you". */
+  readonly showYou = input(true);
   readonly pinPlaced = output<{ lat: number; lng: number }>();
 
   readonly flat = signal(false);
@@ -90,12 +97,38 @@ export class GlobeComponent implements AfterViewInit {
   private ro: ResizeObserver | null = null;
 
   constructor() {
-    inject(DestroyRef).onDestroy(() => { cancelAnimationFrame(this.raf); this.ro?.disconnect(); });
+    inject(DestroyRef).onDestroy(() => { cancelAnimationFrame(this.raf); cancelAnimationFrame(this.flyRaf); this.ro?.disconnect(); });
     effect(() => { this.pin(); this.reveal(); this.schedule(); });
+    // Reveal choreography (plan v2 §5.8): the globe FLIES to the country over
+    // ~1.2 s instead of snapping, so the room sees where the answer is.
     effect(() => {
       const r = this.reveal();
-      if (r?.center) { this.rotation = [-r.center.lng, -r.center.lat]; this.scale = Math.max(this.scale, 1.6); this.schedule(); }
+      if (r?.center) this.flyTo([-r.center.lng, -r.center.lat], Math.max(this.scale, r.center.zoom ? Math.min(3, r.center.zoom / 2) : 1.6));
     });
+  }
+
+  private flyRaf = 0;
+  private flyTo(target: [number, number], targetScale: number): void {
+    cancelAnimationFrame(this.flyRaf);
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const from: [number, number] = [...this.rotation];
+    const fromScale = this.scale;
+    // Shortest way round for longitude.
+    let dLng = target[0] - from[0];
+    dLng = ((dLng + 540) % 360) - 180;
+    const dLat = target[1] - from[1];
+    if (reduced) { this.rotation = target; this.scale = targetScale; this.schedule(); return; }
+    const start = performance.now();
+    const dur = 1200;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / dur);
+      const e = 1 - Math.pow(1 - t, 3);
+      this.rotation = [from[0] + dLng * e, from[1] + dLat * e];
+      this.scale = fromScale + (targetScale - fromScale) * e;
+      this.draw();
+      if (t < 1) this.flyRaf = requestAnimationFrame(step);
+    };
+    this.flyRaf = requestAnimationFrame(step);
   }
 
   ngAfterViewInit(): void {

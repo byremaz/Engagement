@@ -54,13 +54,13 @@ export const ORDER_LABELS_AR: Record<string, OrderLabelsAr> = {
   'SORT-01': {
     prompt: 'رتّب هذه الحيوانات البالغة حسب عدد الأرجل، الأقل أولاً.',
     direction: 'الأقل أرجلاً في الأعلى ← الأكثر في الأسفل',
-    explanation: '٢ ثم ٤ ثم ٦ ثم ٨ أرجل.',
+    explanation: '2 ثم 4 ثم 6 ثم 8 أرجل.',
     labels: ['دجاجة', 'قطة', 'نملة', 'عنكبوت'],
   },
   'SORT-02': {
     prompt: 'رتّب هذه الأشهر الهجرية حسب التقويم.',
     direction: EARLIEST_AR,
-    explanation: 'الأشهر ٧ و٨ و٩ و١٠.',
+    explanation: 'الأشهر 7 و8 و9 و10.',
     labels: ['رجب', 'شعبان', 'رمضان', 'شوال'],
   },
   'SORT-03': {
@@ -72,13 +72,13 @@ export const ORDER_LABELS_AR: Record<string, OrderLabelsAr> = {
   'SORT-04': {
     prompt: 'رتّب هذه القيم من الأصغر إلى الأكبر.',
     direction: ASC_AR,
-    explanation: '0.25 < ‏1/3 < 0.5 < 0.75.',
+    explanation: '0.25 ثم 1/3 ثم 0.5 ثم 0.75.',
     labels: ['0.25', 'ثلث', 'نصف', '0.75'],
   },
   'SORT-05': {
     prompt: 'رتّب هذه الأشهر حسب التقويم.',
     direction: EARLIEST_AR,
-    explanation: 'الأشهر ٣ و٦ و٩ و١٢.',
+    explanation: 'الأشهر 3 و6 و9 و12.',
     labels: ['مارس', 'يونيو', 'سبتمبر', 'ديسمبر'],
   },
   'SORT-06': {

@@ -17,7 +17,8 @@ import { TranslatePipe } from '../i18n/t.pipe';
 const PHASES: { key: string; states: SessionState[] }[] = [
   { key: 'host.progress.lobby', states: ['Draft', 'Lobby'] },
   { key: 'host.progress.instructions', states: ['Instructions'] },
-  { key: 'host.progress.practice', states: ['Practice'] },
+  // Practice runs through the normal round states; `isPractice` selects this phase.
+  { key: 'host.progress.practice', states: [] },
   { key: 'host.progress.game', states: ['Ready', 'Countdown', 'RoundActive', 'InputLocked', 'Reveal'] },
   { key: 'host.progress.results', states: ['GameResults', 'TournamentResults', 'Closed'] },
 ];

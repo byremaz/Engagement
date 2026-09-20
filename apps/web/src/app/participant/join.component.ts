@@ -14,8 +14,9 @@ import { Component, inject, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
+import type { Lang } from '@asas/shared';
 import { ApiService, PublicSession } from '../core/api.service';
-import { loadIdentity, saveIdentity, clearIdentity } from '../core/storage';
+import { loadIdentity, saveIdentity, clearIdentity, loadLang } from '../core/storage';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
 
@@ -40,7 +41,7 @@ import { TranslatePipe } from '../i18n/t.pipe';
               [attr.aria-pressed]="locale.lang() === 'en'" (click)="locale.set('en')">English</button>
           </div>
         </div>
-        <p class="small muted" style="margin:0">Elm</p>
+        <p class="small muted" style="margin:0"><bdi>Elm</bdi></p>
         <h1>{{ 'app.title' | t }}</h1>
         <p class="muted">{{ 'play.formatNote' | t }}</p>
       </header>
@@ -185,6 +186,11 @@ export class JoinComponent implements OnInit {
     if (fromRoute) { this.code = fromRoute.toUpperCase(); void this.preview(); }
   }
 
+  /** A phone with no saved choice starts in the host's default language. */
+  private applyDefaultLang(lang: Lang | undefined): void {
+    if (lang && !loadLang('participant')) this.locale.set(lang);
+  }
+
   canJoin(): boolean {
     const n = this.name.trim();
     return this.code.trim().length >= 4 && n.length >= 2 && n.length <= 24;
@@ -202,6 +208,7 @@ export class JoinComponent implements OnInit {
       const r = await this.api.preview(this.code);
       this.session.set(r.session);
       this.count.set(r.participantCount);
+      this.applyDefaultLang(r.session.defaultParticipantLang);
       this.error.set(null);
     } catch {
       this.session.set(null);
@@ -277,22 +284,4 @@ export class JoinComponent implements OnInit {
 
   continueExisting(): void { void this.router.navigateByUrl('/play'); }
   forget(): void { clearIdentity(); this.existing.set(null); }
-}
-
-/**
- * Non-localized fallback used by other components that surface transport
- * errors. Inside components prefer a localized path like `describeLocalized`.
- */
-export function describe(e: unknown): string {
-  if (e instanceof HttpErrorResponse) {
-    if (e.status === 0) return 'Cannot reach the server. Check your connection and try again.';
-    const msg = (e.error as { message?: string | string[] })?.message;
-    const text = Array.isArray(msg) ? msg.join(' ') : msg;
-    if (e.status === 404) return 'That session code was not found.';
-    if (e.status === 403) return text ? `Not allowed: ${text}` : 'Joining is closed for this session.';
-    if (e.status === 409) return text ?? 'The session is full.';
-    if (e.status === 401) return 'That recovery code is not valid for this session.';
-    return text ?? `Request failed (${e.status}).`;
-  }
-  return 'Something went wrong. Please try again.';
 }

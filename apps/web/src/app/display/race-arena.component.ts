@@ -35,6 +35,16 @@ const MAX_FEED = 4;
   imports: [TranslatePipe],
   template: `
     <div class="arena-wrap">
+      <!-- Simultaneous deaths: ONE burst callout, not a queue of animations (plan v2 §5.11). -->
+      @if (burst(); as b) {
+        <div class="burst rise-in" role="status">
+          <span class="burst__n num">✕ {{ 'display.outBurst' | t: { n: b.count } }}</span>
+          <span class="burst__names">
+            @for (n of b.names.slice(0, 4); track $index) { <bdi>{{ n }}</bdi> }
+            @if (b.names.length > 4) { <span class="num">{{ 'display.andMore' | t: { count: b.names.length - 4 } }}</span> }
+          </span>
+        </div>
+      }
       <!--
         §7: one remaining racer is the whole story — give them a single large
         focused lane rather than one thin row among dozens of dead dots.
@@ -110,8 +120,17 @@ const MAX_FEED = 4;
     </div>
   `,
   styles: [`
-    :host { display: block; min-height: 0; }
+    :host { display: block; min-height: 0; position: relative; }
     .arena-wrap { display: flex; flex-direction: column; gap: 12px; min-height: 0; height: 100%; }
+    .burst {
+      position: absolute; inset-inline-start: 50%; inset-block-start: 18%; transform: translateX(-50%); z-index: 5;
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      background: var(--game-stop); color: var(--elm-almost-white); border: 4px solid var(--elm-almost-white);
+      border-radius: 20px; padding: 14px 32px; box-shadow: var(--elev-overlay);
+    }
+    :host-context([dir="rtl"]) .burst { transform: translateX(50%); }
+    .burst__n { font-size: clamp(36px, 4vw, 60px); font-weight: 900; line-height: 1; }
+    .burst__names { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; font-size: 1.1rem; font-weight: 700; }
 
     .rule { margin: 0; color: var(--elm-light-blue); font-size: 1.05rem; text-align: center; }
     .rule__how { opacity: .85; margin-inline-start: 8px; }
@@ -201,6 +220,8 @@ const MAX_FEED = 4;
 })
 export class RaceArenaComponent {
   readonly race = input<RaceSnapshot | null>(null);
+  /** Aggregated elimination burst (names + count), cleared by the parent after ~2 s. */
+  readonly burst = input<{ names: string[]; count: number } | null>(null);
 
   readonly players = computed<RacePlayerPublic[]>(() => this.race()?.players ?? []);
 

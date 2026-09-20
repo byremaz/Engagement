@@ -11,11 +11,12 @@
  */
 import { Component, computed, input } from '@angular/core';
 import type { GameType, StandingRow } from '@asas/shared';
+import { DISPLAY_ROWS_PER_PAGE } from '@asas/shared';
 import { TranslatePipe } from '../i18n/t.pipe';
 import type { StringKey } from '../i18n/strings.en';
 
-/** Rows per page on the big screen; the plan's 8-10 readable range. */
-const ROWS_PER_PAGE = 9;
+/** Rows per page on the big screen; shared with the host pager so both agree. */
+const ROWS_PER_PAGE = DISPLAY_ROWS_PER_PAGE;
 
 @Component({
   selector: 'app-leader-summary',
@@ -25,6 +26,7 @@ const ROWS_PER_PAGE = 9;
     <div class="wrap">
       <header class="head">
         <h2 class="title">{{ titleKey() | t: titleParams() }}</h2>
+        @if (scope() === 'tournament') { <span class="badge badge-warm">{{ 'display.provisional' | t }}</span> }
         @if (pageCount() > 1) {
           <span class="page num">{{ 'display.page' | t: { page: page() + 1, count: pageCount() } }}</span>
         }

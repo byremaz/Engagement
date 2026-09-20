@@ -129,7 +129,6 @@ export class AudiencePreviewComponent {
         return this.tr('display.joinPrompt');
       case 'Instructions':
         return s.gameType ? this.tr(`game.${s.gameType}`) : this.tr('state.Instructions');
-      case 'Practice':
       case 'Ready':
         return this.tr('state.Ready');
       case 'Countdown':
@@ -159,7 +158,6 @@ export class AudiencePreviewComponent {
       case 'Lobby':
         return this.tr('display.joined', { count: s.participantCount });
       case 'Instructions':
-      case 'Practice':
         return this.tr('host.readyCount', { ready: s.readyCount, total: s.participantCount });
       case 'RoundActive':
       case 'InputLocked':

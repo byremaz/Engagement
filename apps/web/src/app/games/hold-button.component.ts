@@ -57,14 +57,16 @@ import { TranslatePipe } from '../i18n/t.pipe';
     }
     .hold.holding { background: var(--elm-royal-blue); transform: translateY(6px); box-shadow: 0 2px 0 var(--elm-navy); }
     /*
-      On RED the pad is visually a RESTING surface, not an invitation — but it
-      is still a live, pressable control that reports input.
+      On RED the pad becomes a dark, "switched-off" STOP surface (plan v2 §5.2):
+      never a blue invitation. It is still a live, pressable control that
+      reports input, because the server owns the elimination rule.
     */
     .hold--red {
-      background: var(--elm-almost-white); color: var(--elm-navy);
-      border-color: var(--elm-navy); box-shadow: 0 8px 0 rgba(10, 20, 60, .25);
+      background: var(--elm-dark-indigo); color: var(--elm-almost-white);
+      border-color: var(--game-stop); box-shadow: 0 8px 0 var(--game-stop);
+      background-image: repeating-linear-gradient(135deg, transparent 0 14px, rgba(161, 43, 42, .28) 14px 28px);
     }
-    .hold--red.holding { background: var(--elm-peach); }
+    .hold--red.holding { background-color: var(--game-stop); animation: pulse-soft 500ms ease-in-out infinite; }
     .hold:disabled { background: #d5d9e6; color: #5b6078; border-color: #aeb4c9; box-shadow: none; cursor: not-allowed; }
     .hold:focus-visible { outline: 4px solid var(--elm-peach); outline-offset: 3px; }
     @media (prefers-reduced-motion: reduce) {

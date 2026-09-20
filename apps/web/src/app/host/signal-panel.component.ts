@@ -12,6 +12,7 @@
  */
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import type { SessionSnapshot, SignalColor, SignalMode } from '@asas/shared';
+import { RLGL_SPEED_UNITS_PER_SEC } from '@asas/shared';
 import { TranslatePipe } from '../i18n/t.pipe';
 
 @Component({
@@ -94,12 +95,6 @@ import { TranslatePipe } from '../i18n/t.pipe';
         }
       }
 
-      @if (snap()?.paused) {
-        <!-- PAUSED dominates here too: the last signal is context only. -->
-        <p class="signal-panel__paused">{{ 'signal.paused.title' | t }}</p>
-        <p class="small signal-panel__note">{{ 'signal.paused.hostBody' | t }}</p>
-      }
-
       @if (snap()?.race; as r) {
         <p class="small signal-panel__now">
           <span>{{ 'host.signal.current' | t }}:</span>
@@ -107,6 +102,10 @@ import { TranslatePipe } from '../i18n/t.pipe';
           <span aria-hidden="true">·</span>
           <bdi class="num">{{ 'host.race.counts' | t: { alive: aliveCount(), finished: finishedCount(), eliminated: eliminatedCount() } }}</bdi>
         </p>
+        <!-- §6.5: how much GREEN the furthest racer still needs to finish, so a manual host never starves the race. -->
+        @if (greenNeededSec() !== null && canSignal()) {
+          <p class="small signal-panel__note num">{{ 'host.greenNeeded' | t: { sec: greenNeededSec() } }}</p>
+        }
       }
     </section>
   `,
@@ -125,12 +124,6 @@ import { TranslatePipe } from '../i18n/t.pipe';
         gap: var(--space-1, 4px);
         margin: 0;
         align-items: baseline;
-      }
-      .signal-panel__paused {
-        margin: 0;
-        font-size: var(--fs-xl, 1.375rem);
-        font-weight: 800;
-        letter-spacing: 0.04em;
       }
       .segmented {
         display: inline-flex;
@@ -219,4 +212,12 @@ export class SignalPanelComponent {
   readonly aliveCount = computed(() => this.players().filter((p) => p.state === 'alive').length);
   readonly finishedCount = computed(() => this.players().filter((p) => p.state === 'finished').length);
   readonly eliminatedCount = computed(() => this.players().filter((p) => p.state === 'eliminated').length);
+
+  /** Seconds of GREEN the leading live racer still needs (track 100 at 3 u/s). */
+  readonly greenNeededSec = computed<number | null>(() => {
+    const alive = this.players().filter((p) => p.state === 'alive');
+    if (!alive.length) return null;
+    const best = Math.max(...alive.map((p) => p.progress));
+    return Math.ceil((100 - best) / RLGL_SPEED_UNITS_PER_SEC);
+  });
 }

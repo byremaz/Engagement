@@ -1,30 +1,35 @@
 /**
- * Host desk — a focused live-event control shell (plan §2).
+ * Host desk — a live-event control room (plan v2 §4.2).
  *
- * Three zones that fit 1366x768 without page scrolling:
- *   1. status bar   — where are we (title, code, state, clocks, connections)
- *   2. progression  — Lobby → Instructions → Practice → Game → Results
- *   3. live area    — audience preview + ONE primary action (+ RLGL signals)
+ * Fits 1366x768 without page scrolling:
+ *   status bar   — where are we (title, code, state, clocks, connections)
+ *   progression  — Lobby → Instructions → Practice → Game → Results
+ *   NOW & NEXT   — one sentence about the room + ONE primary action
+ *   ROOM         — what the room sees, display language, contextual panel
+ *                  (race signals / podium stepper / standings pager)
+ *   RUNBOOK      — the 30-minute plan with the current step and the drift
  *
- * Everything that is not "what do I press next" (exports, session admin,
- * roster, rehearsal) lives in drawers. Signals stay visually separated from
- * progression and never advance the event. The host key is only ever read from
- * sessionStorage and travels in a header via the interceptor [secure-coding].
+ * Everything that is not "what do I press next" lives in drawers. Destructive
+ * actions go through an in-app dialog that states the consequence. Signals
+ * stay visually separated from progression and never advance the event. The
+ * host key is only ever read from sessionStorage and travels in a header via
+ * the interceptor [secure-coding].
  */
 import { Component, computed, effect, inject, OnDestroy, OnInit, signal } from '@angular/core';
-import type { HostAction, ParticipantHostView, SignalColor, SignalMode } from '@asas/shared';
+import type { HostAction, HostActionPayload, Lang, ParticipantHostView, SignalColor, SignalMode } from '@asas/shared';
 import { topThreeTies } from '@asas/shared';
 import { ApiService, HostSession } from '../core/api.service';
 import { RealtimeService } from '../core/realtime.service';
 import { HOST_KEY_STORAGE, HOST_SESSION_STORAGE } from '../core/storage';
-import { describe } from '../participant/join.component';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
-import type { StringKey } from '../i18n/strings.en';
 import { StandingsTableComponent } from '../shared/standings-table.component';
+import { PausedPanelComponent } from '../shared/paused-panel.component';
+import { ConfirmDialogComponent } from '../shared/confirm-dialog.component';
+import { DialogService } from '../shared/dialog.service';
 import { HostStatusBarComponent } from './status-bar.component';
 import { ProgressionStripComponent } from './progression-strip.component';
-import { PrimaryActionComponent } from './primary-action.component';
+import { PrimaryActionComponent, type PrimaryPress } from './primary-action.component';
 import { SecondaryActionsComponent } from './secondary-actions.component';
 import { AudiencePreviewComponent } from './audience-preview.component';
 import { SignalPanelComponent } from './signal-panel.component';
@@ -33,40 +38,30 @@ import { RosterListComponent } from './roster-list.component';
 import { RehearsalPanelComponent } from './rehearsal-panel.component';
 import { SessionAdminComponent, type ExportKind } from './session-admin.component';
 import { HostSigninComponent } from './host-signin.component';
-
-const CEREMONY: StringKey[] = [
-  'host.ceremony.intro',
-  'host.ceremony.third',
-  'host.ceremony.second',
-  'host.ceremony.first',
-  'host.ceremony.full',
-];
+import { RunbookRailComponent } from './runbook-rail.component';
+import { PodiumStepperComponent } from './podium-stepper.component';
+import { StandingsPagerComponent } from './standings-pager.component';
+import { DisplaySettingsComponent } from './display-settings.component';
+import { primaryActionFor } from './next-action';
+import { hostErrorFromHttp, hostErrorFromMessage, type HostError } from './host-errors';
 
 @Component({
   selector: 'app-host',
   standalone: true,
   imports: [
-    TranslatePipe,
-    StandingsTableComponent,
-    HostSigninComponent,
-    HostStatusBarComponent,
-    ProgressionStripComponent,
-    PrimaryActionComponent,
-    SecondaryActionsComponent,
-    AudiencePreviewComponent,
-    SignalPanelComponent,
-    HostDrawerComponent,
-    RosterListComponent,
-    RehearsalPanelComponent,
-    SessionAdminComponent,
+    TranslatePipe, StandingsTableComponent, PausedPanelComponent, ConfirmDialogComponent, HostSigninComponent,
+    HostStatusBarComponent, ProgressionStripComponent, PrimaryActionComponent, SecondaryActionsComponent,
+    AudiencePreviewComponent, SignalPanelComponent, HostDrawerComponent, RosterListComponent, RehearsalPanelComponent,
+    SessionAdminComponent, RunbookRailComponent, PodiumStepperComponent, StandingsPagerComponent, DisplaySettingsComponent,
   ],
   template: `
+    <app-confirm-dialog />
     @if (!hostKey() || !session()) {
       <app-host-signin
         [signedIn]="!!hostKey()"
         [sessions]="sessions()"
         [busy]="busy()"
-        [err]="err()"
+        [err]="errText()"
         (keyEntered)="signIn($event)"
         (create)="create($event)"
         (open)="open($event)"
@@ -74,7 +69,6 @@ const CEREMONY: StringKey[] = [
       />
     } @else if (session()) {
       @let ses = session()!;
-      <!-- role-host: desk type scale (plan section 9). -->
       <div class="desk role-host">
         <app-host-status-bar
           [snap]="snap()"
@@ -85,16 +79,9 @@ const CEREMONY: StringKey[] = [
           [elapsedLabel]="elapsedLabel()"
           [overrun]="elapsedMin() > 30"
         >
-          <button type="button" class="btn btn-secondary sm" (click)="locale.toggle()">
-            {{ locale.toggleLabel() }}
-          </button>
+          <button type="button" class="btn btn-secondary sm" (click)="locale.toggle()">{{ locale.toggleLabel() }}</button>
           <app-host-drawer titleKey="host.roster" [(open)]="rosterOpen">
-            <app-roster-list
-              [players]="roster()"
-              (refresh)="loadRoster()"
-              (rename)="rename($event)"
-              (remove)="remove($event)"
-            />
+            <app-roster-list [players]="roster()" (refresh)="loadRoster()" (rename)="rename($event)" (remove)="remove($event)" />
           </app-host-drawer>
           <app-host-drawer titleKey="host.drawer.session" [(open)]="adminOpen">
             <app-session-admin
@@ -112,38 +99,31 @@ const CEREMONY: StringKey[] = [
             />
           </app-host-drawer>
           <app-host-drawer titleKey="host.drawer.rehearsal" [(open)]="rehearsalOpen">
-            <app-rehearsal-panel
-              [count]="simCount()"
-              [simulatedCount]="simulatedCount()"
-              [busy]="simBusy()"
-              (countChange)="setSimCount($event)"
-              (add)="addSimulated()"
-              (clear)="removeSimulated()"
-            />
+            <app-rehearsal-panel [count]="simCount()" [simulatedCount]="simulatedCount()" [busy]="simBusy()" (countChange)="setSimCount($event)" (add)="addSimulated()" (clear)="removeSimulated()" />
           </app-host-drawer>
-          <button type="button" class="btn btn-secondary sm" (click)="backToSessions()">
-            {{ 'host.backToSessions' | t }}
-          </button>
+          <button type="button" class="btn btn-secondary sm" (click)="backToSessions()">{{ 'host.backToSessions' | t }}</button>
         </app-host-status-bar>
 
         <nav class="desk__strip"><app-progression-strip [snap]="snap()" /></nav>
 
-        <!-- Real failures only; cleared whenever the authoritative state moves. -->
-        @if (err(); as e) { <div class="alert alert-error desk__err">{{ e }}</div> }
+        @if (errText(); as e) { <div class="alert alert-error desk__err" role="alert">{{ e }}</div> }
 
         <main class="desk__main">
-          <section class="card stack desk__stage">
-            <h2 class="desk__h2">{{ 'host.stage' | t }}</h2>
+          <!-- NOW & NEXT -->
+          <section class="card stack desk__now">
             @if (snap(); as s) {
+              @if (s.paused) {
+                <app-paused-panel [forHost]="true" [previousSignal]="s.gameType === 'RLGL' && s.race ? s.race.signal : null" />
+              }
+              <p class="desk__nowline">
+                <span class="badge badge-stage">{{ 'host.nowNext.now' | t }}</span>
+                <strong class="stage-state">{{ 'state.' + s.state | t }}</strong>
+                @if (s.isPractice) { <span class="badge badge-lavender">{{ 'state.Practice' | t }}</span> }
+              </p>
               <p class="small muted desk__counts">
-                @if (s.state === 'Instructions' || s.state === 'Practice') {
+                @if (s.state === 'Instructions') {
                   <span><bdi>{{ 'host.readyCount' | t: { ready: s.readyCount, total: s.participantCount } }}</bdi></span>
                 }
-                <!--
-                  Plan §2: counters are stage- AND game-aware. A race has no
-                  "answers", so RLGL reports racing/finished/out from the
-                  authoritative race snapshot; only GEO/ORDER count responses.
-                -->
                 @if (s.state === 'RoundActive' || s.state === 'InputLocked') {
                   @if (s.gameType === 'RLGL') {
                     <span><bdi>{{ 'host.race.counts' | t: raceCounts() }}</bdi></span>
@@ -152,54 +132,46 @@ const CEREMONY: StringKey[] = [
                   }
                 }
               </p>
-              <!-- §4: describe the last racer; never call them a winner. -->
               @if (s.gameType === 'RLGL' && lastSurvivor() && s.state === 'RoundActive') {
                 <p class="alert alert-info">{{ 'host.lastSurvivor' | t }}</p>
               }
               @if (s.state === 'InputLocked') { <p class="alert alert-info">{{ 'host.lockedHint' | t }}</p> }
             }
 
-            <app-primary-action [snap]="snap()" [busy]="busy()" (run)="act($event)" />
+            <app-primary-action [snap]="snap()" [busy]="busy()" (run)="press($event)" />
             <app-secondary-actions [snap]="snap()" [busy]="busy()" [primary]="primaryAction()" (run)="act($event)" />
 
-            @if (snap()?.state === 'TournamentResults') {
-              <h3 class="desk__h3">{{ 'host.ceremony.title' | t }}</h3>
-              <div class="desk__row">
-                @for (k of ceremony; track k; let i = $index) {
-                  <button
-                    type="button"
-                    class="btn"
-                    [class.btn-stage]="snap()?.ceremonyStep === i"
-                    [class.btn-secondary]="snap()?.ceremonyStep !== i"
-                    (click)="act('CEREMONY_STEP', { step: i })"
-                  >
-                    {{ k | t }}
-                  </button>
-                }
-                @if (tiedCount() > 0) {
-                  <button type="button" class="btn btn-warm" (click)="tieBreak()">
-                    {{ 'host.tiebreak' | t: { count: tiedCount() } }}
-                  </button>
-                }
-              </div>
+            @if (snap()?.state === 'GameResults' || snap()?.state === 'TournamentResults') {
+              <app-podium-stepper [snap]="snap()" [busy]="busy()" (step)="podiumStep($event)" (tieBreak)="tieBreak()" />
+            }
+            @if (showPager()) {
+              <app-standings-pager [snap]="snap()" [busy]="busy()" (pageChange)="act('STANDINGS_PAGE', { page: $event })" />
             }
           </section>
 
+          <!-- ROOM -->
           <section class="card stack desk__room">
             <app-audience-preview [snap]="snap()" />
+            <app-display-settings
+              [displayLang]="snap()?.displayLang ?? 'en'"
+              [defaultLang]="snap()?.defaultParticipantLang ?? 'en'"
+              [busy]="busy()"
+              (displayLangChange)="setLanguages({ displayLang: $event })"
+              (defaultLangChange)="setLanguages({ defaultParticipantLang: $event })"
+            />
             @if (snap()?.gameType === 'RLGL') {
-              <app-signal-panel
-                [snap]="snap()"
-                [mode]="ses.signalMode"
-                (signal)="sendSignal($event)"
-                (modeChange)="setMode($event)"
-              />
+              <app-signal-panel [snap]="snap()" [mode]="ses.signalMode" (signal)="sendSignal($event)" (modeChange)="setMode($event)" />
             }
           </section>
+
+          <!-- RUNBOOK -->
+          <aside class="card desk__rail">
+            <app-runbook-rail [snap]="snap()" [elapsedMin]="elapsedMin()" />
+          </aside>
 
           @if (snap()?.standings; as rows) {
             <section class="card stack desk__standings">
-              <h2 class="desk__h2">{{ 'host.standings' | t }}</h2>
+              <h2 class="desk__h2">{{ (snap()?.state === 'GameResults' ? 'display.currentGame' : 'display.tournament') | t: { game: gameName() } }}</h2>
               <app-standings-table [rows]="rows" [pageSize]="10" />
             </section>
           }
@@ -207,87 +179,47 @@ const CEREMONY: StringKey[] = [
       </div>
     }
   `,
-  styles: [
-    `
-      .desk {
-        display: flex;
-        flex-direction: column;
-        block-size: 100dvh;
-        overflow: hidden;
-      }
-      .desk__strip {
-        padding: var(--space-2, 8px) var(--space-5, 20px);
-        border-block-end: 1px solid var(--elm-light-blue, #bdc9e9);
-      }
-      .desk__err {
-        margin: var(--space-2, 8px) var(--space-5, 20px) 0;
-      }
-      .desk__main {
-        flex: 1;
-        min-block-size: 0;
-        overflow: auto;
-        display: grid;
-        grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
-        align-content: start;
-        gap: var(--space-4, 16px);
-        padding: var(--space-4, 16px) var(--space-5, 20px);
-      }
-      .desk__standings {
-        grid-column: 1 / -1;
-      }
-      .desk__h2 {
-        margin: 0;
-        font-size: var(--fs-md, 1rem);
-      }
-      .desk__h3 {
-        margin: var(--space-2, 8px) 0 0;
-        font-size: var(--fs-sm, 0.875rem);
-      }
-      .desk__counts {
-        display: flex;
-        gap: var(--space-3, 12px);
-        margin: 0;
-      }
-      .desk__row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: var(--space-2, 8px);
-      }
-      .sm {
-        min-block-size: 32px;
-        padding: 2px 10px;
-      }
-      @media (max-width: 900px) {
-        .desk {
-          block-size: auto;
-          overflow: visible;
-        }
-        .desk__main {
-          grid-template-columns: 1fr;
-        }
-      }
-    `,
-  ],
+  styles: [`
+    .desk { display: flex; flex-direction: column; block-size: 100dvh; overflow: hidden; }
+    .desk__strip { padding: var(--space-2) var(--space-5); border-block-end: 1px solid var(--elm-light-blue); }
+    .desk__err { margin: var(--space-2) var(--space-5) 0; }
+    .desk__main {
+      flex: 1; min-block-size: 0; overflow: auto;
+      display: grid; grid-template-columns: minmax(340px, 1.2fr) minmax(300px, 1fr) minmax(220px, .7fr);
+      align-content: start; gap: var(--space-4); padding: var(--space-4) var(--space-5);
+    }
+    .desk__standings { grid-column: 1 / -1; }
+    .desk__h2 { margin: 0; font-size: var(--fs-0); }
+    .desk__nowline { display: flex; align-items: center; gap: var(--space-2); margin: 0; flex-wrap: wrap; }
+    .desk__counts { display: flex; gap: var(--space-3); margin: 0; min-block-size: 1.4em; }
+    .sm { min-block-size: 32px; padding: 2px 10px; }
+    @media (max-width: 1100px) {
+      .desk__main { grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr); }
+      .desk__rail { grid-column: 1 / -1; }
+    }
+    @media (max-width: 900px) {
+      .desk { block-size: auto; overflow: visible; }
+      .desk__main { grid-template-columns: 1fr; }
+    }
+  `],
 })
 export class HostComponent implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
   readonly rt = inject(RealtimeService);
   readonly locale = inject(LocaleService);
-
-  readonly ceremony = CEREMONY;
+  private readonly dialog = inject(DialogService);
 
   readonly hostKey = signal<string | null>(sessionStorage.getItem(HOST_KEY_STORAGE));
   readonly sessions = signal<HostSession[]>([]);
   readonly session = signal<HostSession | null>(null);
   readonly roster = signal<ParticipantHostView[]>([]);
-  readonly err = signal<string | null>(null);
+  readonly err = signal<HostError | null>(null);
   readonly busy = signal(false);
   readonly copied = signal(false);
   readonly simCount = signal(20);
   readonly simBusy = signal(false);
   readonly snap = this.rt.snapshot;
 
-  /** Drawers are two-way bound; all of them close on a stage change. */
   readonly rosterOpen = signal(false);
   readonly adminOpen = signal(false);
   readonly rehearsalOpen = signal(false);
@@ -296,10 +228,17 @@ export class HostComponent implements OnInit, OnDestroy {
   private readonly clock = signal(Date.now());
   private clockTimer: ReturnType<typeof setInterval> | null = null;
 
+  readonly errText = computed(() => {
+    this.locale.lang();
+    const e = this.err();
+    if (!e) return null;
+    const text = this.locale.t(e.key, e.params);
+    return e.raw && e.key === 'error.generic' ? `${text} (${e.raw})` : text;
+  });
+
   readonly onlineCount = computed(() => this.roster().filter((p) => p.connected).length);
   readonly simulatedCount = computed(() => this.roster().filter((p) => p.isSimulated).length);
   readonly canVoid = computed(() => !!this.snap()?.attemptId && !this.snap()?.isPractice);
-  readonly tiedCount = computed(() => topThreeTies(this.snap()?.standings ?? [])[0]?.length ?? 0);
   readonly elapsedMin = computed(() => {
     const t = this.snap()?.eventStartedAt;
     return t ? (this.clock() - t) / 60000 : 0;
@@ -310,15 +249,19 @@ export class HostComponent implements OnInit, OnDestroy {
     const s = Math.floor((this.elapsedMin() - m) * 60);
     return `${m}:${String(s).padStart(2, '0')}`;
   });
+  readonly primaryAction = computed<HostAction | null>(() => primaryActionFor(this.snap()));
+  readonly gameName = computed(() => {
+    const g = this.snap()?.gameType;
+    return g ? this.locale.t(`game.${g}`) : '';
+  });
+  readonly showPager = computed(() => {
+    const s = this.snap();
+    if (!s?.standings?.length) return false;
+    if (s.state === 'GameResults') return (s.podiumStep ?? 0) >= 4;
+    if (s.state === 'TournamentResults') return s.ceremonyStep >= 4;
+    return false;
+  });
 
-  /** Mirrors `PrimaryActionComponent` so the secondary row never repeats it. */
-  readonly primaryAction = signal<HostAction | null>(null);
-
-  /**
-   * Live race counts from the authoritative snapshot (plan §2/§4). Returns
-   * real numbers only — never a fabricated zero — so the host can see at a
-   * glance how many players are still racing.
-   */
   readonly raceCounts = computed(() => {
     const players = this.snap()?.race?.players ?? [];
     return {
@@ -327,20 +270,23 @@ export class HostComponent implements OnInit, OnDestroy {
       eliminated: players.filter((p) => p.state === 'eliminated').length,
     };
   });
-
-  /** §4: one remaining racer is described, never announced as a "winner". */
   readonly lastSurvivor = computed(() => this.raceCounts().alive === 1);
 
   constructor() {
-    // Stale feedback cannot survive an authoritative state change: whenever the
-    // snapshot moves (`seq`/`state`), old errors are dropped and drawers close.
+    // A stage change drops stale feedback AND closes every drawer over the live area.
+    let lastState = '';
     effect(() => {
       const s = this.snap();
       if (!s) return;
       void s.seq;
-      void s.state;
       this.err.set(null);
       this.copied.set(false);
+      if (s.state !== lastState) {
+        lastState = s.state;
+        this.rosterOpen.set(false);
+        this.adminOpen.set(false);
+        this.rehearsalOpen.set(false);
+      }
     });
   }
 
@@ -359,10 +305,6 @@ export class HostComponent implements OnInit, OnDestroy {
     this.rt.disconnect();
     if (this.rosterTimer) clearInterval(this.rosterTimer);
     if (this.clockTimer) clearInterval(this.clockTimer);
-  }
-
-  private tr(key: StringKey, params?: Record<string, string | number>): string {
-    return this.locale.t(key, params);
   }
 
   signIn(key: string): void {
@@ -392,7 +334,7 @@ export class HostComponent implements OnInit, OnDestroy {
     try {
       return await fn();
     } catch (e) {
-      this.err.set(describe(e));
+      this.err.set(hostErrorFromHttp(e));
       if ((e as { status?: number }).status === 401) this.signOut();
       return undefined;
     } finally {
@@ -430,15 +372,28 @@ export class HostComponent implements OnInit, OnDestroy {
     }
   }
 
-  async act(action: HostAction, payload: Record<string, unknown> = {}): Promise<void> {
-    this.primaryAction.set(action);
-    const r = await this.rt.hostAction(action, payload);
-    this.err.set(r.ok ? null : (r.error ?? this.tr('error.generic')));
+  press(p: PrimaryPress): void {
+    void this.act(p.action, p.payload ?? {});
+  }
+
+  podiumStep(step: number): void {
+    const final = this.snap()?.state === 'TournamentResults';
+    void this.act(final ? 'CEREMONY_STEP' : 'PODIUM_STEP', { step });
+  }
+
+  async act(action: HostAction, payload: HostActionPayload = {}): Promise<void> {
+    this.busy.set(true);
+    try {
+      const r = await this.rt.hostAction(action, payload);
+      this.err.set(r.ok ? null : hostErrorFromMessage(r.error));
+    } finally {
+      this.busy.set(false);
+    }
   }
 
   async sendSignal(color: SignalColor): Promise<void> {
     const r = await this.rt.hostSignal(color);
-    if (!r.ok) this.err.set(r.error ?? this.tr('error.generic'));
+    if (!r.ok) this.err.set(hostErrorFromMessage(r.error));
   }
 
   async setMode(mode: SignalMode): Promise<void> {
@@ -446,6 +401,12 @@ export class HostComponent implements OnInit, OnDestroy {
     if (!s) return;
     const u = await this.guard(() => this.api.setSignalMode(s.id, mode));
     if (u) this.session.set(u);
+  }
+
+  async setLanguages(langs: { displayLang?: Lang; defaultParticipantLang?: Lang }): Promise<void> {
+    const s = this.session();
+    if (!s) return;
+    await this.guard(() => this.api.setLanguages(s.id, langs));
   }
 
   async toggleJoin(): Promise<void> {
@@ -462,23 +423,26 @@ export class HostComponent implements OnInit, OnDestroy {
     else void this.api.download(s.id, 'standings', kind === 'standings-private' ? 'private' : 'public');
   }
 
-  voidRound(): void {
-    const reason = prompt(`${this.tr('host.session.voidConsequence')}\n${this.tr('host.session.voidReason')}`);
-    if (reason && reason.trim().length >= 3) void this.act('VOID_ROUND', { reason: reason.trim() });
+  async voidRound(): Promise<void> {
+    const reason = await this.dialog.confirm({
+      titleKey: 'host.void.title', bodyKey: 'host.void.body', confirmKey: 'host.void.confirm', danger: true,
+      input: { labelKey: 'host.session.voidReason', minLength: 3, maxLength: 200 },
+    });
+    if (reason) void this.act('VOID_ROUND', { reason });
   }
 
-  tieBreak(): void {
+  async tieBreak(): Promise<void> {
     const ids = topThreeTies(this.snap()?.standings ?? [])[0];
-    if (ids?.length && confirm(this.tr('host.tiebreak.confirm', { count: ids.length }))) {
-      void this.act('START_TIEBREAK', { participantIds: ids });
-    }
+    if (!ids?.length) return;
+    const ok = await this.dialog.confirm({ titleKey: 'host.tiebreak.title', bodyKey: 'host.tiebreak.confirm', params: { count: ids.length }, confirmKey: 'action.START_TIEBREAK' });
+    if (ok !== null) void this.act('START_TIEBREAK', { participantIds: ids });
   }
 
   async closeSession(): Promise<void> {
     const s = this.session();
     if (!s) return;
-    if (!confirm(`${this.tr('host.session.closeConfirm')}\n${this.tr('host.session.closeConsequence')}`)) return;
-    if (!confirm(this.tr('host.session.closeConfirm2'))) return;
+    const ok = await this.dialog.confirm({ titleKey: 'host.session.closeTitle', bodyKey: 'host.session.closeConsequence', confirmKey: 'host.session.close', danger: true });
+    if (ok === null) return;
     const u = await this.guard(() => this.api.closeSession(s.id));
     if (u) this.session.set(u);
   }
@@ -503,7 +467,8 @@ export class HostComponent implements OnInit, OnDestroy {
   async removeSimulated(): Promise<void> {
     const s = this.session();
     if (!s) return;
-    if (!confirm(this.tr('host.rehearsal.clearConfirm', { count: this.simulatedCount() }))) return;
+    const ok = await this.dialog.confirm({ titleKey: 'host.rehearsal.clearTitle', bodyKey: 'host.rehearsal.clearConfirm', params: { count: this.simulatedCount() }, confirmKey: 'host.rehearsal.clear', danger: true });
+    if (ok === null) return;
     this.simBusy.set(true);
     try {
       await this.guard(() => this.api.removeSimulated(s.id));
@@ -515,8 +480,9 @@ export class HostComponent implements OnInit, OnDestroy {
 
   async rename(p: ParticipantHostView): Promise<void> {
     const s = this.session();
-    const name = prompt(this.tr('host.roster.renamePrompt', { name: p.name }), p.name);
-    if (s && name && name.trim().length >= 2) {
+    if (!s) return;
+    const name = await this.dialog.confirm({ titleKey: 'host.roster.renameTitle', params: { name: p.name }, confirmKey: 'host.roster.rename', input: { labelKey: 'host.roster.newName', initial: p.name, minLength: 2, maxLength: 24 } });
+    if (name && name.trim().length >= 2) {
       await this.guard(() => this.api.rename(s.id, p.id, name.trim()));
       await this.loadRoster();
     }
@@ -524,10 +490,11 @@ export class HostComponent implements OnInit, OnDestroy {
 
   async remove(p: ParticipantHostView): Promise<void> {
     const s = this.session();
-    if (s && confirm(this.tr('host.roster.removeConfirm', { name: p.name, number: p.number }))) {
-      await this.guard(() => this.api.remove(s.id, p.id));
-      await this.loadRoster();
-    }
+    if (!s) return;
+    const ok = await this.dialog.confirm({ titleKey: 'host.roster.removeTitle', bodyKey: 'host.roster.removeBody', params: { name: p.name, number: p.number }, confirmKey: 'host.roster.remove', danger: true });
+    if (ok === null) return;
+    await this.guard(() => this.api.remove(s.id, p.id));
+    await this.loadRoster();
   }
 
   async openDisplay(): Promise<void> {

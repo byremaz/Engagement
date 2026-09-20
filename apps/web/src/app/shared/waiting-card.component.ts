@@ -20,7 +20,6 @@ import type { StringKey } from '../i18n/strings.en';
 const KNOWN: readonly SessionState[] = [
   'Lobby',
   'Instructions',
-  'Practice',
   'Ready',
   'Countdown',
   'InputLocked',
@@ -33,7 +32,6 @@ const KNOWN: readonly SessionState[] = [
 const NEXT: Partial<Record<SessionState, StringKey>> = {
   Lobby: 'wait.next.startRound',
   Instructions: 'wait.next.startRound',
-  Practice: 'wait.next.startRound',
   Ready: 'wait.next.startRound',
   Countdown: 'wait.next.startRound',
   InputLocked: 'wait.next.reveal',

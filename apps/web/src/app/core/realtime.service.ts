@@ -1,11 +1,17 @@
 /**
  * Socket.IO client wrapper. Applies snapshots monotonically by `seq` (§12.4)
  * and exposes signals for templates. One instance per browser tab.
+ *
+ * Personal state (`me`) belongs to ONE attempt: a new host-authorized attempt
+ * resets it entirely (lock, pin, order, result, life), so nothing from the
+ * previous round can block the next one (plan v2, BUG-H). The server also
+ * re-issues `me` at every round start, tagged with its `attemptId`; a payload
+ * for another attempt is ignored.
  */
 import { Injectable, NgZone, signal, computed } from '@angular/core';
 import { io, Socket } from 'socket.io-client';
-import type { MyLife, MyRoundState, RaceLifeState, SessionSnapshot, SignalColor, HostAction, HostActionPayload } from '@asas/shared';
-import { resolveLife, shouldResetLife, strongerLife } from '@asas/shared';
+import type { MyLife, MyRoundState, RaceLifeState, RaceSnapshot, SessionSnapshot, SignalColor, HostAction, HostActionPayload } from '@asas/shared';
+import { emptyMyRoundState, resolveLife, shouldResetLife, strongerLife } from '@asas/shared';
 
 export type ConnState = 'connecting' | 'connected' | 'disconnected' | 'replaced' | 'unauthorized';
 
@@ -100,34 +106,23 @@ export class RealtimeService {
       const offset = snap.serverTime - Date.now();
       this.clockOffset.set(this.snapshot() ? this.clockOffset() * 0.7 + offset * 0.3 : offset);
 
-      // A new host-authorized attempt is the ONLY path that clears life state.
-      if (shouldResetLife(this.lifeAttemptId, snap.attemptId)) {
-        this.lifeAttemptId = snap.attemptId;
-        this.lifeFromEvent.set('unknown');
-        this.seenElimination.clear();
-        this.personalEliminated.set(null);
-        const cur = this.me();
-        if (cur?.race) this.me.set({ ...cur, race: null });
-      }
+      // A new host-authorized attempt is the ONLY path that clears personal state.
+      if (shouldResetLife(this.lifeAttemptId, snap.attemptId)) this.resetForAttempt(snap.attemptId);
 
       // Reconnect recovery: the snapshot carries authoritative life state for
       // every racer, so a refresh mid-race restores the outcome even if the
       // one-shot `me` elimination event was missed entirely.
-      const pid = this.myParticipantId();
-      const mine = pid ? snap.race?.players.find((p) => p.participantId === pid) ?? null : null;
-      if (mine) {
-        const strongest = strongerLife(this.lifeFromEvent(), mine.state);
-        if (strongest !== 'unknown') {
-          this.lifeFromEvent.set(strongest);
-          const cur = this.me() ?? emptyMe();
-          if (cur.race?.state !== strongest || cur.race?.progress !== mine.progress) {
-            this.me.set({ ...cur, race: { progress: mine.progress, state: strongest as RaceLifeState } });
-          }
-          // Restored from a snapshot: show the card, never replay the sound.
-          if (strongest === 'eliminated') this.seenElimination.add(-1);
-        }
-      }
+      this.applyRaceLife(snap.race);
       this.snapshot.set(snap);
+    }));
+    s.on('race', (ev: { attemptId: string; race: RaceSnapshot }) => run(() => {
+      // Lightweight position update (5 Hz): patches the current snapshot only
+      // when it belongs to the same attempt, so a late tick never resurrects a
+      // finished race on screen.
+      const cur = this.snapshot();
+      if (!cur || cur.attemptId !== ev.attemptId) return;
+      this.applyRaceLife(ev.race);
+      this.snapshot.set({ ...cur, race: ev.race });
     }));
     s.on('me', (payload: Partial<MyRoundState> & { eliminated?: boolean; eventId?: number }) => run(() => {
       if (payload.eliminated) {
@@ -135,7 +130,7 @@ export class RealtimeService {
         // can never be dropped because `me()` or `me().race` was still null
         // (the default after a refresh/reconnect). `seenElimination` gates only
         // the one-shot animation + sound, never the state itself.
-        const cur = this.me() ?? emptyMe();
+        const cur = this.me() ?? emptyMe(this.lifeAttemptId);
         this.me.set({ ...cur, race: { progress: cur.race?.progress ?? 0, state: 'eliminated' } });
         this.lifeFromEvent.set('eliminated');
         if (payload.eventId !== undefined && !this.seenElimination.has(payload.eventId)) {
@@ -144,7 +139,11 @@ export class RealtimeService {
         }
         return;
       }
-      const merged: MyRoundState = { ...(this.me() ?? emptyMe()), ...payload };
+      // A payload for a different attempt is stale (or early); the snapshot that
+      // introduces the attempt will reset state and the server re-issues `me`.
+      const current = this.snapshot()?.attemptId ?? this.lifeAttemptId;
+      if (payload.attemptId && current && payload.attemptId !== current) return;
+      const merged: MyRoundState = { ...(this.me() ?? emptyMe(this.lifeAttemptId)), ...payload };
       // A server payload must never walk a known outcome back to `alive`.
       const strongest = strongerLife(this.lifeFromEvent(), merged.race?.state ?? 'unknown');
       if (merged.race && strongest !== 'unknown' && merged.race.state !== strongest) {
@@ -155,6 +154,33 @@ export class RealtimeService {
     }));
     s.on('signal', (ev: SignalEvent) => run(() => this.lastSignal.set(ev)));
     s.on('eliminated', (ev: EliminatedEvent) => run(() => this.elimination.set(ev)));
+  }
+
+  /** Everything personal starts over for a new attempt (BUG-H). */
+  private resetForAttempt(attemptId: string | null): void {
+    this.lifeAttemptId = attemptId;
+    this.lifeFromEvent.set('unknown');
+    this.seenElimination.clear();
+    this.personalEliminated.set(null);
+    this.lastSignal.set(null);
+    this.elimination.set(null);
+    this.me.set(emptyMe(attemptId));
+  }
+
+  /** Merges the player's own lane from a race payload under "never revive". */
+  private applyRaceLife(race: RaceSnapshot | null | undefined): void {
+    const pid = this.myParticipantId();
+    const mine = pid ? race?.players.find((p) => p.participantId === pid) ?? null : null;
+    if (!mine) return;
+    const strongest = strongerLife(this.lifeFromEvent(), mine.state);
+    if (strongest === 'unknown') return;
+    this.lifeFromEvent.set(strongest);
+    const cur = this.me() ?? emptyMe(this.lifeAttemptId);
+    if (cur.race?.state !== strongest || cur.race?.progress !== mine.progress) {
+      this.me.set({ ...cur, race: { progress: mine.progress, state: strongest as RaceLifeState } });
+    }
+    // Restored from a snapshot: show the card, never replay the sound.
+    if (strongest === 'eliminated') this.seenElimination.add(-1);
   }
 
   disconnect(): void {
@@ -177,13 +203,26 @@ export class RealtimeService {
   setReady(ready: boolean) { return this.emitAck<{ ok: boolean }>('me:ready', { ready }); }
   sendPin(lat: number, lng: number, lock: boolean) { return this.emitAck<{ ok: boolean; state?: MyRoundState; error?: string }>('me:pin', { lat, lng, lock }); }
   sendOrder(order: string[], lock: boolean) { return this.emitAck<{ ok: boolean; state?: MyRoundState; error?: string }>('me:order', { order, lock }); }
-  sendHold(holding: boolean) { this.socket?.emit('me:hold', { holding }); }
+  /** Hold heartbeat; the ack carries the player's own progress so the phone track moves at once. */
+  sendHold(holding: boolean): void {
+    if (!this.socket) return;
+    this.socket.emit('me:hold', { holding }, (res: { progress: number; state: RaceLifeState } | null) => {
+      if (!res) return;
+      this.zone.run(() => {
+        const strongest = strongerLife(this.lifeFromEvent(), res.state);
+        const state = (strongest === 'unknown' ? res.state : strongest) as RaceLifeState;
+        const cur = this.me() ?? emptyMe(this.lifeAttemptId);
+        this.me.set({ ...cur, race: { progress: res.progress, state } });
+        if (strongest === 'eliminated' || strongest === 'finished') this.lifeFromEvent.set(strongest);
+      });
+    });
+  }
 
   // host
   hostAction(action: HostAction, payload: HostActionPayload = {}) { return this.emitAck<{ ok: boolean; error?: string }>('host:action', { action, payload }); }
   hostSignal(color: SignalColor) { return this.emitAck<{ ok: boolean; error?: string }>('host:signal', { color }); }
 }
 
-export function emptyMe(): MyRoundState {
-  return { locked: false, saved: false, pin: null, order: null, race: null, result: null };
+export function emptyMe(attemptId: string | null = null): MyRoundState {
+  return emptyMyRoundState(attemptId);
 }

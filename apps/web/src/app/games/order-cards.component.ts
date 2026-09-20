@@ -39,7 +39,10 @@ export interface OrderCard { id: string; label: string; }
           <span class="pos num" aria-hidden="true">{{ i + 1 }}</span>
           <span class="label"><bdi>{{ c.label }}</bdi></span>
           @if (reveal()) {
-            <span class="mark" [attr.aria-label]="(reveal()![i] ? 'order.correctPosition' : 'order.wrongPosition') | t">{{ reveal()![i] ? '✓ +25' : '✗' }}</span>
+            <span class="mark num" [attr.aria-label]="(reveal()![i] ? 'order.correctPosition' : 'order.wrongPosition') | t">{{ reveal()![i] ? ('order.mark.correct' | t: { pts: pointsPerCard() }) : '✗' }}</span>
+            @if (!reveal()![i] && correctIndexOf(c.id) !== null) {
+              <span class="goes num" aria-hidden="true">→ {{ correctIndexOf(c.id)! + 1 }}</span>
+            }
           } @else {
             <span class="controls">
               <button type="button" class="btn btn-primary mv" [disabled]="locked() || first" (click)="move(i, -1)" [attr.aria-label]="'order.moveUp' | t">▲</button>
@@ -69,9 +72,11 @@ export interface OrderCard { id: string; label: string; }
     .label { flex: 1; font-size: 18px; font-weight: 600; }
     .controls { display: flex; flex-direction: column; gap: 4px; }
     .mv { min-height: 34px; min-width: 44px; padding: 2px 8px; font-size: 14px; border-radius: 8px; }
-    .handle { flex: 0 0 32px; text-align: center; font-size: 22px; color: var(--elm-slate); cursor: grab; touch-action: none; line-height: 1; }
+    .handle { flex: 0 0 32px; text-align: center; font-size: 22px; color: var(--elm-muted-indigo); cursor: grab; touch-action: none; line-height: 1; }
     .mark { font-weight: 800; font-size: 18px; }
     .wrong .mark { color: var(--elm-burgundy); }
+    /* Where a misplaced card should have gone: a small hint, never a second score. */
+    .goes { font-size: 14px; font-weight: 700; color: var(--elm-muted-indigo); }
     .locked .card-item { opacity: .92; }
     @media (prefers-reduced-motion: reduce) { .card-item { transition: none; } }
   `],
@@ -81,7 +86,16 @@ export class OrderCardsComponent {
   readonly locked = input(false);
   /** Per-position correctness after reveal; null before reveal. */
   readonly reveal = input<boolean[] | null>(null);
+  /** The correct order after reveal, so a misplaced card can point to its slot. */
+  readonly correctOrder = input<string[] | null>(null);
+  /** Points per correctly placed card (from the session's frozen rules). */
+  readonly pointsPerCard = input(20);
   readonly orderChange = output<string[]>();
+
+  correctIndexOf(id: string): number | null {
+    const idx = this.correctOrder()?.indexOf(id) ?? -1;
+    return idx >= 0 ? idx : null;
+  }
 
   readonly selected = signal<string | null>(null);
   readonly dragId = signal<string | null>(null);
@@ -92,13 +106,15 @@ export class OrderCardsComponent {
 
   readonly ids = computed(() => this.cards().map((c) => c.id));
 
+  /** Buttons and keys INSERT (remove + splice), exactly like a drag, so every input agrees. */
   move(index: number, delta: number): void {
     if (this.locked() || this.reveal()) return;
     const ids = [...this.ids()];
     const j = index + delta;
     if (j < 0 || j >= ids.length) return;
-    [ids[index], ids[j]] = [ids[j]!, ids[index]!];
-    this.selected.set(ids[j]!);
+    const [id] = ids.splice(index, 1);
+    ids.splice(j, 0, id!);
+    this.selected.set(id!);
     this.orderChange.emit(ids);
   }
 

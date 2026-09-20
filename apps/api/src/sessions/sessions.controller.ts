@@ -36,6 +36,7 @@ function publicSession(s: SessionRow) {
     joinOpen: s.join_open,
     paused: s.paused,
     createdAt: s.created_at,
+    defaultParticipantLang: s.default_participant_lang ?? 'en',
   };
 }
 
@@ -50,6 +51,8 @@ function hostSession(s: SessionRow) {
     contentFrozen: s.content_frozen,
     eventStartedAt: s.event_started_at,
     closedAt: s.closed_at,
+    displayLang: s.display_lang ?? 'en',
+    defaultParticipantLang: s.default_participant_lang ?? 'en',
   };
 }
 

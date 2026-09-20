@@ -44,6 +44,7 @@ import type { StringKey } from '../i18n/strings.en';
         </div>
 
         <p class="scoring"><strong>{{ 'howto.scoring' | t }}:</strong> {{ scoringKey() | t }}</p>
+        <p class="rule"><span aria-hidden="true">💡</span> {{ 'howto.rule' | t }}</p>
         <p class="small muted">{{ 'howto.waitHost' | t }}</p>
         @if (showReadyNote()) { <p class="small muted">{{ 'howto.readyNote' | t }}</p> }
       </section>
@@ -60,6 +61,14 @@ import type { StringKey } from '../i18n/strings.en';
     .large .n { flex-basis: 56px; width: 56px; height: 56px; font-size: 28px; }
     .large .headline { font-size: 32px; }
     .large .scoring { font-size: 28px; }
+    .rule { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--elm-pale-blue); font-weight: 600; }
+    .large .rule { font-size: 26px; }
+    /* Reduced motion: the demos show their end state instead of looping. */
+    @media (prefers-reduced-motion: reduce) {
+      .demo-runner, .demo-signal, .demo-globe, .c.a, .c.b { animation: none; }
+      .demo-runner { left: 55%; }
+      .demo-signal { background: var(--game-stop); }
+    }
     /* The demo is a physical illustration: it stays LTR in both languages (plan §1). */
     .example { overflow: hidden; direction: ltr; }
     .example .small { direction: inherit; }

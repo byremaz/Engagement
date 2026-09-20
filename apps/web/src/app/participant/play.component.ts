@@ -1,19 +1,23 @@
 /**
- * Participant phone (§4.3): follows the host-selected stage. Name at the top,
- * task in the centre, one dominant action near the bottom. "Answer locked"
- * only after server acknowledgment. Sound is off by default on phones (§14).
+ * Participant phone (§4.3, plan v2 §4.1): follows the host-selected stage.
+ * A fixed header with the player's identity and ONE status chip, a single
+ * dominant state panel in the middle, and one control near the bottom.
+ * "Answer locked" only after server acknowledgment. Phones are silent by
+ * default (§14): vibration is their channel.
  */
 import { Component, computed, effect, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { NgTemplateOutlet } from '@angular/common';
 import type { SignalColor, StandingRow } from '@asas/shared';
+import { ORDER_POINTS_PER_CARD, ORDER_POINTS_PER_CARD_V2, SCORING_RULE_VERSION, gameTitle } from '@asas/shared';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
 import type { StringKey } from '../i18n/strings.en';
 import { PausedPanelComponent } from '../shared/paused-panel.component';
 import { WaitingCardComponent } from '../shared/waiting-card.component';
-import { ResultBreakdownComponent } from '../shared/result-breakdown.component';
+import { RoundResultCardComponent } from '../shared/round-result-card.component';
 import { StandingsTableComponent } from '../shared/standings-table.component';
+import { PodiumComponent } from '../shared/podium.component';
 import { RealtimeService, emptyMe } from '../core/realtime.service';
 import { loadIdentity, clearIdentity, StoredIdentity } from '../core/storage';
 import { TimerComponent } from '../shared/timer.component';
@@ -21,50 +25,35 @@ import { HowToPlayComponent } from '../shared/how-to-play.component';
 import { HoldButtonComponent } from '../games/hold-button.component';
 import { RaceStatePanelComponent } from '../games/race-state-panel.component';
 import { EliminationPanelComponent } from '../games/elimination-panel.component';
+import { RaceChipComponent } from '../games/race-chip.component';
+import { ProgressTrackComponent } from '../games/progress-track.component';
 import { GlobeComponent } from '../games/globe.component';
 import { OrderCardsComponent } from '../games/order-cards.component';
+import { PersonalPodiumComponent } from './personal-podium.component';
 
 @Component({
   selector: 'app-play',
   standalone: true,
   imports: [
-    NgTemplateOutlet,
-    TranslatePipe,
-    TimerComponent,
-    HowToPlayComponent,
-    HoldButtonComponent,
-    RaceStatePanelComponent,
-    EliminationPanelComponent,
-    GlobeComponent,
-    OrderCardsComponent,
-    PausedPanelComponent,
-    WaitingCardComponent,
-    ResultBreakdownComponent,
-    StandingsTableComponent,
+    NgTemplateOutlet, TranslatePipe, TimerComponent, HowToPlayComponent, HoldButtonComponent, RaceStatePanelComponent,
+    EliminationPanelComponent, RaceChipComponent, ProgressTrackComponent, GlobeComponent, OrderCardsComponent,
+    PausedPanelComponent, WaitingCardComponent, RoundResultCardComponent, StandingsTableComponent, PodiumComponent,
+    PersonalPodiumComponent,
   ],
   template: `
     @if (id(); as ident) {
-      <!-- role-participant applies the phone type scale (plan section 9). -->
-    <main class="page role-participant">
-        <header class="row">
+      <main class="page role-participant">
+        <header class="row hdr">
           <span class="avatar" aria-hidden="true">{{ ident.avatar }}</span>
-          <div>
-            <strong>{{ ident.name }}</strong>
-            <!--
-              §5: a bare "#7" beside a rank badge reads as a rank. The player
-              number is now explicitly LABELLED, and the tournament rank is a
-              separate labelled badge.
-            -->
+          <div class="who">
+            <strong><bdi>{{ ident.name }}</bdi></strong>
             <div class="small muted"><bdi>{{ 'play.header.player' | t: { number: ident.number } }}</bdi></div>
           </div>
           <span class="spacer"></span>
-          @if (myRank(); as r) {
-            <span class="badge badge-warm num">{{ 'play.header.rank' | t: { rank: r.rank, total: r.total } }}</span>
-          } @else {
-            <!-- Never a stale or invented rank before the reveal. -->
-            <span class="badge small">{{ 'play.header.rankPending' | t }}</span>
+          @if (snap(); as s) {
+            <app-race-chip [life]="rt.myLife()" [state]="s.state" [paused]="s.paused" [gameType]="s.gameType" [locked]="mine().locked" />
           }
-          <button class="btn btn-secondary lang" (click)="locale.toggle()" [attr.aria-label]="'common.language' | t">{{ 'common.langToggle' | t }}</button>
+          <span class="pts num" [attr.aria-label]="'common.points' | t"><bdi>{{ myPoints() }}</bdi> <span class="small muted">{{ 'common.pts' | t }}</span></span>
           <button class="btn btn-secondary help" (click)="help.set(!help())" [attr.aria-label]="'common.help' | t">?</button>
         </header>
 
@@ -81,9 +70,10 @@ import { OrderCardsComponent } from '../games/order-cards.component';
 
         @if (help()) {
           <section class="card stack">
-            <app-how-to-play [game]="snap()?.gameType ?? 'RLGL'" />
+            <app-how-to-play [game]="snap()?.gameType ?? 'RLGL'" [showReadyNote]="true" />
             <p class="small muted">{{ 'play.scoring.note' | t }}</p>
-            <button class="btn btn-secondary" (click)="help.set(false)">{{ 'common.close' | t }}</button>
+            <button class="btn btn-secondary lang" (click)="locale.toggle()" [attr.aria-label]="'common.language' | t">{{ 'common.langToggle' | t }}</button>
+            <button class="btn btn-primary" (click)="help.set(false)">{{ 'common.close' | t }}</button>
           </section>
         } @else {
           @if (snap(); as s) {
@@ -101,10 +91,11 @@ import { OrderCardsComponent } from '../games/order-cards.component';
                     <p class="num" style="font-size:24px;letter-spacing:.15em;margin:6px 0 0"><bdi>{{ ident.recoveryCode }}</bdi></p>
                   </div>
                   <p class="small muted">{{ 'play.formatNote' | t }}</p>
+                  <button class="btn btn-secondary" (click)="locale.toggle()">{{ 'common.langToggle' | t }}</button>
                 </section>
               }
               @case ('Instructions') {
-                <app-how-to-play [game]="s.gameType" />
+                <app-how-to-play [game]="s.gameType" [showReadyNote]="true" />
                 <button class="btn btn-lg btn-block" [class.btn-primary]="!ready()" [class.btn-secondary]="ready()" (click)="toggleReady()">
                   {{ (ready() ? 'play.ready.done' : 'play.ready') | t }}
                 </button>
@@ -112,7 +103,7 @@ import { OrderCardsComponent } from '../games/order-cards.component';
               }
               @case ('Ready') {
                 <section class="card stack center">
-                  <span class="badge badge-stage">{{ gameTitle() }}</span>
+                  <span class="badge badge-stage">{{ gameName() }}</span>
                   <h2>{{ s.isPractice ? ('play.practice' | t) : ('play.round' | t: { n: s.roundNumber, total: s.roundCount }) }}</h2>
                   @if (s.roundPublic?.type === 'GEO') { <p>{{ 'play.getReadyGeo' | t }} <strong><bdi>{{ geoName() }}</bdi></strong></p> }
                   <p class="muted">{{ 'play.waitingHost' | t }}</p>
@@ -123,6 +114,7 @@ import { OrderCardsComponent } from '../games/order-cards.component';
                   <p class="muted" style="color:var(--elm-light-blue)">{{ 'play.startsIn' | t: { label: s.isPractice ? ('play.practice' | t) : ('play.roundShort' | t: { n: s.roundNumber, total: s.roundCount }) } }}</p>
                   <app-timer [endsAt]="s.countdownEndsAt" class="countdown" />
                   @if (s.roundPublic?.type === 'GEO') { <p style="font-size:22px"><bdi>{{ 'play.findCountry' | t: { country: geoName() } }}</bdi></p> }
+                  @if (s.roundPublic?.type === 'RLGL') { <p style="font-size:18px">{{ 'race.countdown.body' | t }}</p> }
                 </section>
               }
               @case ('RoundActive') { <ng-container *ngTemplateOutlet="arena" /> }
@@ -131,33 +123,22 @@ import { OrderCardsComponent } from '../games/order-cards.component';
                 <div class="alert alert-info center" role="status">{{ 'play.roundClosed' | t }}</div>
               }
               @case ('Reveal') { <ng-container *ngTemplateOutlet="arena" /> }
-              @case ('Practice') { <ng-container *ngTemplateOutlet="arena" /> }
               @case ('GameResults') {
-                <section class="card stack">
-                  <h2><bdi>{{ gameTitle() }}</bdi> — {{ 'state.GameResults' | t }}</h2>
-                  @if (mine().result; as res) {
-                    <app-result-breakdown
-                      [result]="res"
-                      [gameType]="snap()?.gameType ?? null"
-                      [rankTotal]="s.standings?.length ?? null"
-                      [distanceKm]="myDistanceKm()"
-                      [pinPlaced]="!!mine().pin"
-                      [correctCount]="orderCorrectCount()"
-                      [raceOutcome]="raceOutcome()" />
-                  }
-                  @if (myRank(); as r) {
-                    <div class="card-white card center">
-                      <p class="muted small" style="margin:0">{{ 'result.tournament' | t }}</p>
-                      <p class="num" style="font-size:40px;font-weight:800;margin:0">{{ r.total }}</p>
-                      <p class="small num">{{ 'result.rankOf' | t: { rank: r.rank, total: s.standings?.length ?? '–' } }}</p>
-                    </div>
-                  }
-                  <app-waiting-card [state]="s.state" />
-                </section>
+                <app-personal-podium
+                  [rows]="s.standings ?? []"
+                  [tournamentRows]="null"
+                  [step]="s.podiumStep ?? 0"
+                  [me]="ident.participantId"
+                  [game]="s.gameType"
+                  [gameIndex]="s.gameIndex" />
+                @if (mine().result; as res) {
+                  <app-round-result-card [result]="res" [gameType]="s.gameType" [roundNumber]="s.roundCount" [roundCount]="s.roundCount" />
+                }
               }
               @case ('TournamentResults') {
                 <section class="card stack center">
-                  <h2>{{ 'play.finalHeading' | t }}</h2>
+                  <h2>{{ 'podium.tournament' | t }}</h2>
+                  <app-podium [rows]="s.standings ?? []" [step]="s.ceremonyStep" [highlight]="ident.participantId" />
                   @if (myRank(); as r) {
                     <p class="num" style="font-size:44px;font-weight:800;margin:0"><bdi>{{ r.total }}</bdi></p>
                     <p class="num">{{ (r.rank <= 3 ? 'play.podium' : 'play.finished') | t: { rank: r.rank } }}</p>
@@ -165,19 +146,9 @@ import { OrderCardsComponent } from '../games/order-cards.component';
                   }
                   <p class="small muted">{{ 'play.thanks' | t }}</p>
                 </section>
-                <!--
-                  §5/§8: final standings always carry the personal card plus
-                  search and "Show me", so a player never has to page through
-                  50+ rows to find their own result.
-                -->
                 @if (s.standings; as rows) {
                   <section class="card stack">
-                    <app-standings-table
-                      [rows]="rows"
-                      [pageSize]="10"
-                      [highlight]="ident.participantId"
-                      [searchable]="true"
-                      [revealed]="true" />
+                    <app-standings-table [rows]="rows" [pageSize]="10" [highlight]="ident.participantId" [searchable]="true" [revealed]="true" />
                   </section>
                 }
               }
@@ -193,10 +164,10 @@ import { OrderCardsComponent } from '../games/order-cards.component';
           }
         }
 
-        <footer class="center small muted">{{ 'app.builtUsing' | t }}</footer>
+        <footer class="center attribution">{{ 'app.builtUsing' | t }}</footer>
       </main>
 
-      <!-- Game arena: shared by RoundActive / InputLocked / Reveal / Practice -->
+      <!-- Game arena: shared by RoundActive / InputLocked / Reveal -->
       <ng-template #arena>
         @if (snap(); as s) {
           @if (s.roundPublic; as rp) {
@@ -210,16 +181,13 @@ import { OrderCardsComponent } from '../games/order-cards.component';
 
             @switch (rp.type) {
               @case ('RLGL') {
-                <!--
-                  Plan §3/§4: ONE primary panel. A confirmed elimination
-                  replaces the whole game panel immediately — it does not wait
-                  for a reveal, a signal change or the end of the round.
-                -->
-                @if (rt.amEliminated()) {
+                <!-- ONE dominant panel. A confirmed elimination takes over the screen at once (plan v2 §5.3). -->
+                @if (rt.amEliminated() && !s.reveal) {
                   <app-elimination-panel
                     [avatar]="ident.avatar"
                     [finalRace]="isFinalRace()"
                     [aliveCount]="aliveCount()"
+                    [safePoints]="myPoints()"
                     [playEffect]="rt.personalEliminated() !== null" />
                 } @else {
                   <app-race-state-panel
@@ -229,75 +197,64 @@ import { OrderCardsComponent } from '../games/order-cards.component';
                     [paused]="s.paused"
                     [connected]="rt.conn() === 'connected'"
                     [countdown]="s.state === 'Countdown'"
-                    [timeEnded]="s.state === 'InputLocked'"
-                    [active]="s.state === 'RoundActive'" />
-
-                  <!-- Progress stays visible while the player is still in. -->
-                  <div class="track" aria-hidden="true">
-                    <div class="fill" [style.width.%]="mine().race?.progress ?? 0"></div>
-                    <div class="runner" [style.left.%]="mine().race?.progress ?? 0">{{ ident.avatar }}</div>
-                  </div>
-                  <p class="center num">{{ 'race.progress' | t: { n: trackPct() } }}</p>
-
-                  <!--
-                    The pad is rendered ONLY in states where movement is possible.
-                    On RED it is present and enabled (input must still be sent for
-                    the elimination rule) but labelled "DO NOT PRESS".
-                  -->
-                  @if (padVisible()) {
-                    <app-hold-button
-                      [color]="signal()"
-                      [enabled]="padEnabled()"
-                      [overlayOpen]="helpOpen()"
-                      (hold)="onHold($event)" />
-                  }
+                    [timeEnded]="s.state === 'InputLocked' || s.state === 'Reveal'"
+                    [active]="s.state === 'RoundActive'"
+                    [progress]="trackPct()" />
                 }
-                @if (s.reveal?.type === 'RLGL') {
-                  @if (mine().result; as r) {
-                    <div class="card-white card center pop"><strong>{{ r.label }}</strong></div>
-                  }
+                @if (!s.reveal) {
+                  <app-progress-track [progress]="mine().race?.progress ?? 0" [avatar]="ident.avatar" [done]="rt.amFinished()" [out]="rt.amEliminated()" />
+                }
+                @if (padVisible()) {
+                  <app-hold-button [color]="signal()" [enabled]="padEnabled()" [overlayOpen]="helpOpen()" (hold)="onHold($event)" />
+                }
+                @if (s.reveal?.type === 'RLGL' || rt.amEliminated() || rt.amFinished()) {
+                  <app-round-result-card
+                    [result]="mine().result"
+                    [gameType]="'RLGL'"
+                    [roundNumber]="s.roundNumber"
+                    [roundCount]="s.roundCount"
+                    [isPractice]="s.isPractice"
+                    [raceOutcome]="raceOutcome()" />
                 }
               }
               @case ('GEO') {
-                <h2 class="center"><bdi>{{ 'play.findCountry' | t: { country: geoName() } }}</bdi></h2>
-                <p class="center small muted">{{ pinStatusKey() | t }}</p>
+                <h2 class="center find"><bdi>{{ 'play.findCountry' | t: { country: geoName() } }}</bdi></h2>
+                <p class="center small muted">{{ pinStatusKey() | t: { sec: lockSec() } }}</p>
                 <app-globe
                   [interactive]="s.state === 'RoundActive' && !s.paused && !mine().locked"
                   [pin]="mine().pin"
                   [reveal]="geoReveal()"
                   (pinPlaced)="placePin($event)" />
                 @if (mine().result; as r) {
-                  <div class="card-white card center pop"><strong>{{ r.label }}</strong></div>
+                  <app-round-result-card [result]="r" [gameType]="'GEO'" [roundNumber]="s.roundNumber" [roundCount]="s.roundCount" [isPractice]="s.isPractice" [distanceKm]="myDistanceKm()" [pinPlaced]="!!mine().pin" />
                 } @else if (mine().locked) {
-                  <div class="alert alert-info center" role="status">{{ 'play.locked' | t }}</div>
+                  <div class="alert alert-info center" role="status">{{ 'geo.status.lockedIn' | t: { sec: lockSec() } }}</div>
                 } @else {
                   <button class="btn btn-primary btn-lg btn-block" [disabled]="!mine().pin || s.state !== 'RoundActive' || s.paused || busy()" (click)="lockPin()">
-                    {{ (mine().pin ? 'play.lockPin' : 'play.tapGlobeFirst') | t }}
+                    📍 {{ (mine().pin ? 'play.lockPin' : 'play.tapGlobeFirst') | t }}
                   </button>
-                  @if (mine().pin && mine().saved) { <p class="small muted center">{{ 'play.pinSaved' | t }}</p> }
                 }
               }
               @case ('ORDER') {
                 <section class="card stack">
-                  <h2 style="font-size:24px"><bdi>{{ orderPrompt() }}</bdi></h2>
-                  <p class="badge badge-lavender" style="align-self:flex-start"><bdi>{{ 'order.direction' | t }}: {{ orderDirection() }}</bdi></p>
-                  <p class="small muted" style="margin:0">{{ 'order.firstIsTop' | t }}</p>
-                  <!-- Explicit ORDER transition ladder (plan §8). -->
-                  <p class="small muted" style="margin:0">{{ orderStatusKey() | t }}</p>
+                  <h2 style="font-size:22px;margin:0"><bdi>{{ orderPrompt() }}</bdi></h2>
+                  <p class="badge badge-lavender" style="align-self:flex-start"><bdi>{{ orderDirection() }}</bdi></p>
+                  <p class="small muted" style="margin:0">{{ orderStatusKey() | t: { sec: lockSec() } }}</p>
                 </section>
                 <app-order-cards
                   [cards]="orderCards()"
                   [locked]="mine().locked || s.state !== 'RoundActive' || s.paused"
                   [reveal]="orderReveal()"
+                  [correctOrder]="orderCorrect()"
+                  [pointsPerCard]="pointsPerCard()"
                   (orderChange)="changeOrder($event)" />
                 @if (mine().result; as r) {
-                  <div class="card-white card center pop"><strong>{{ r.label }}</strong>
-                    @if (orderExplanation(); as ex) { <p class="small muted" style="margin:6px 0 0">{{ ex }}</p> }
-                  </div>
+                  <app-round-result-card [result]="r" [gameType]="'ORDER'" [roundNumber]="s.roundNumber" [roundCount]="s.roundCount" [isPractice]="s.isPractice" [correctCount]="orderCorrectCount()" />
+                  @if (orderExplanation(); as ex) { <p class="small muted center">{{ ex }}</p> }
                 } @else if (mine().locked) {
-                  <div class="alert alert-info center" role="status">{{ 'play.locked' | t }}</div>
+                  <div class="alert alert-info center" role="status">{{ 'order.status.lockedIn' | t: { sec: lockSec() } }}</div>
                 } @else {
-                  <button class="btn btn-primary btn-lg btn-block" [disabled]="s.state !== 'RoundActive' || s.paused || busy()" (click)="lockOrder()">{{ 'play.lockOrder' | t }}</button>
+                  <button class="btn btn-primary btn-lg btn-block" [disabled]="s.state !== 'RoundActive' || s.paused || busy()" (click)="lockOrder()">✓ {{ 'play.lockOrder' | t }}</button>
                 }
               }
             }
@@ -308,10 +265,15 @@ import { OrderCardsComponent } from '../games/order-cards.component';
     }
   `,
   styles: [`
-    .avatar { font-size: 32px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; background: var(--elm-pale-blue); border-radius: 50%; border: 2px solid var(--elm-light-blue); }
+    .hdr { position: sticky; top: 0; z-index: 5; background: var(--page-bg); padding-block: 4px; }
+    .avatar { font-size: 28px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; background: var(--elm-pale-blue); border-radius: 50%; border: 2px solid var(--elm-light-blue); flex: 0 0 auto; }
+    .who { min-width: 0; }
+    .who strong { display: block; max-width: 22vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pts { font-weight: 800; font-size: 18px; white-space: nowrap; }
     .help { min-width: 44px; padding: 0; font-weight: 800; }
     .countdown { font-size: 64px; color: var(--elm-peach); }
     .round-timer { font-size: 40px; }
+    .find { font-size: clamp(22px, 6vw, 28px); margin: 0; }
   `],
 })
 export class PlayComponent implements OnInit, OnDestroy {
@@ -324,78 +286,56 @@ export class PlayComponent implements OnInit, OnDestroy {
   /** Private per-round state for this participant (server-authoritative). */
   readonly mine = computed(() => this.rt.me() ?? emptyMe());
   readonly help = signal(false);
-
-  // ------------------------------------------------ race pad state (plan §3)
-  /** Mirrors the pad's hold state so the panel can say "You're moving…". */
   readonly holding = signal(false);
-
-  /** The help sheet is an overlay: opening it must release any active hold. */
   readonly helpOpen = computed(() => this.help());
 
-  /**
-   * The pad exists only where movement is genuinely possible. Countdown,
-   * pause, death, finish, reconnect and time-up remove it entirely rather
-   * than showing a dead control (plan §3).
-   */
+  /** Last tournament total the server told us (survives across rounds). */
+  private readonly lastTotal = signal(0);
+  readonly myPoints = computed(() => {
+    const row = this.myRank();
+    if (row) return row.total;
+    const t = this.mine().result?.tournamentTotal;
+    return t ?? this.lastTotal();
+  });
+
+  /** The pad exists only where movement is genuinely possible. */
   readonly padVisible = computed(() => {
     const s = this.snap();
-    if (!s || s.state !== 'RoundActive') return false;
-    if (s.paused) return false;
+    if (!s || s.state !== 'RoundActive' || s.paused) return false;
     if (this.rt.conn() !== 'connected') return false;
     return this.rt.myLife() === 'alive';
   });
-
-  /**
-   * Enabled whenever it is visible — INCLUDING on red. The label changes, the
-   * input does not: the server owns the elimination rule and must still see a
-   * press on red (plan Notes/Risks).
-   */
+  /** Enabled whenever visible — INCLUDING on red; the server owns the rule. */
   readonly padEnabled = computed(() => this.padVisible());
 
-  /** Whole-number track progress for the localized "{n}% of the track" line. */
   readonly trackPct = computed(() => Math.round(this.mine().race?.progress ?? 0));
-
-  /** Real count of players still racing, or null when the race is unknown. */
   readonly aliveCount = computed(() => {
     const players = this.snap()?.race?.players;
-    if (!players) return null;
-    return players.filter((p) => p.state === 'alive').length;
+    return players ? players.filter((p) => p.state === 'alive').length : null;
   });
-
-  /**
-   * True on the last race of the game, which changes the elimination closing
-   * line so we never promise a next race that does not exist (plan §4).
-   */
   readonly isFinalRace = computed(() => {
     const s = this.snap();
-    if (!s || s.isPractice) return false;
-    return s.roundNumber >= s.roundCount;
+    return !!s && !s.isPractice && s.roundNumber >= s.roundCount;
   });
 
-  /** Keeps the panel's holding state in step with the pad. */
   onHold(down: boolean): void {
     this.holding.set(down);
     this.rt.sendHold(down);
   }
   readonly busy = signal(false);
   readonly err = signal<string | null>(null);
-  /** Local pending order before server save (keeps UI snappy while throttled). */
   private readonly localOrder = signal<string[] | null>(null);
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  readonly gameTitle = computed(() => {
-    this.locale.lang();
+  readonly gameName = computed(() => {
     const g = this.snap()?.gameType;
-    return g ? this.locale.t(`game.${g}` as StringKey) : '';
+    return g ? gameTitle(g, this.locale.lang()) : '';
   });
-  /** Country name in the active language (Arabic label travels in the snapshot). */
   readonly geoName = computed(() => {
     const rp = this.snap()?.roundPublic;
     if (rp?.type !== 'GEO') return '';
     return this.locale.lang() === 'ar' ? rp.countryNameAr || rp.countryName : rp.countryName;
   });
-
-  /** ORDER prompt/direction in the active language; option IDs stay untranslated. */
   readonly orderPrompt = computed(() => {
     const rp = this.snap()?.roundPublic;
     if (rp?.type !== 'ORDER') return '';
@@ -406,26 +346,29 @@ export class PlayComponent implements OnInit, OnDestroy {
     if (rp?.type !== 'ORDER') return '';
     return this.locale.lang() === 'ar' ? rp.directionAr || rp.direction : rp.direction;
   });
+  /** Points per card from the frozen rules of THIS session, never hard-coded. */
+  readonly pointsPerCard = computed(() => (this.snap()?.scoringRuleVersion === SCORING_RULE_VERSION ? ORDER_POINTS_PER_CARD_V2 : ORDER_POINTS_PER_CARD));
 
-  /** Explicit pin status (plan §5): not placed / saved / locked. */
+  /** Seconds to the manual lock, shown so the player learns the speed bonus. */
+  readonly lockSec = computed(() => {
+    const t = this.mine().result?.timeMs ?? this.lockedAtMs();
+    return t === null || t === undefined ? '' : (t / 1000).toFixed(1);
+  });
+  private readonly lockedAtMs = signal<number | null>(null);
+
   readonly pinStatusKey = computed<StringKey>(() => {
     const me = this.mine();
     const s = this.snap();
-    // Explicit ladder (plan §8):
-    //   No pin -> saved -> locked | accepted at timeout -> waiting -> explained.
-    // "Saved" describes DELIVERY only; it is never a correctness hint, and a
-    // timeout is explained in words so a zero is never an unexplained failure.
     if (s?.reveal?.type === 'GEO') return 'geo.status.revealed';
     const closed = s?.state === 'InputLocked' || s?.state === 'Reveal';
     if (closed) {
       if (me.locked) return 'geo.status.waiting';
       return me.pin ? 'geo.status.acceptedTimeout' : 'geo.status.noAnswerTimeout';
     }
-    if (me.locked) return 'geo.status.locked';
+    if (me.locked) return 'geo.status.lockedIn';
     return me.pin ? 'geo.status.saved' : 'geo.status.none';
   });
 
-  /** The same explicit ladder for ORDER (plan §8). */
   readonly orderStatusKey = computed<StringKey>(() => {
     const me = this.mine();
     const s = this.snap();
@@ -435,38 +378,35 @@ export class PlayComponent implements OnInit, OnDestroy {
       if (me.locked) return 'order.status.waiting';
       return me.order ? 'order.status.acceptedTimeout' : 'order.status.noAnswerTimeout';
     }
-    if (me.locked) return 'order.status.locked';
-    return me.saved ? 'order.status.saved' : 'order.status.none';
+    if (me.locked) return 'order.status.lockedIn';
+    return me.saved || this.localOrder() ? 'order.status.saved' : 'order.status.none';
   });
   readonly orderExplanation = computed<string | null>(() => {
     const rv = this.snap()?.reveal;
     if (rv?.type !== 'ORDER') return null;
     return this.locale.lang() === 'ar' ? rv.explanationAr || rv.explanation : rv.explanation;
   });
-
-  /** How many cards ended in the right place — drives the outcome sentence. */
+  readonly orderCorrect = computed<string[] | null>(() => {
+    const rv = this.snap()?.reveal;
+    return rv?.type === 'ORDER' ? rv.correctOrder : null;
+  });
   readonly orderCorrectCount = computed<number | null>(() => {
     const flags = this.orderReveal();
     return flags ? flags.filter(Boolean).length : null;
   });
-
-  /** Distance of my pin from the target country (km); 0 when inside. */
   readonly myDistanceKm = computed<number | null>(() => {
     const rv = this.snap()?.reveal;
     const ident = this.id();
     if (rv?.type !== 'GEO' || !ident) return null;
     return rv.pins.find((p) => p.participantId === ident.participantId)?.distanceKm ?? null;
   });
-
-  /** My end-of-race outcome, for the RLGL outcome sentence. */
   readonly raceOutcome = computed<'finished' | 'eliminated' | 'timeout' | null>(() => {
-    const st = this.mine().race?.state;
+    const st = this.rt.myLife();
     if (st === 'finished') return 'finished';
     if (st === 'eliminated') return 'eliminated';
     return this.snap()?.reveal?.type === 'RLGL' ? 'timeout' : null;
   });
   readonly readyLocal = signal(false);
-  /** Readiness is server-side; we mirror our last acknowledged toggle locally. */
   readonly ready = computed(() => this.readyLocal());
 
   readonly signal = computed<SignalColor>(() => {
@@ -481,13 +421,18 @@ export class PlayComponent implements OnInit, OnDestroy {
     return rows && ident ? rows.find((r) => r.participantId === ident.participantId) ?? null : null;
   });
 
+  /** Cards in the current arrangement, labelled in the active language (plan v2, BUG-K). */
   readonly orderCards = computed(() => {
     const rp = this.snap()?.roundPublic;
     if (rp?.type !== 'ORDER') return [];
+    const ar = this.locale.lang() === 'ar';
+    const labelled = rp.options.map((o) => ({ id: o.id, label: ar ? o.labelAr || o.label : o.label }));
     const order = this.localOrder() ?? this.mine().order;
-    if (!order) return rp.options;
-    const byId = new Map(rp.options.map((o) => [o.id, o]));
-    return order.map((id) => byId.get(id)!).filter(Boolean);
+    if (!order) return labelled;
+    const byId = new Map(labelled.map((o) => [o.id, o]));
+    const arranged = order.map((id) => byId.get(id)).filter((o): o is { id: string; label: string } => !!o);
+    // A stale arrangement from another round can never hide the cards.
+    return arranged.length === labelled.length ? arranged : labelled;
   });
 
   readonly orderReveal = computed<boolean[] | null>(() => {
@@ -500,10 +445,9 @@ export class PlayComponent implements OnInit, OnDestroy {
   readonly geoReveal = computed(() => {
     const rv = this.snap()?.reveal;
     if (rv?.type !== 'GEO') return null;
-    const g = (rv as unknown as { geometry?: { type: 'MultiPolygon'; coordinates: number[][][][] } | null; center?: { lat: number; lng: number } | null });
     return {
-      geometry: g.geometry ?? null,
-      center: g.center ?? null,
+      geometry: rv.geometry ?? null,
+      center: rv.center ?? null,
       pins: rv.pins.map((p) => ({ lat: p.lat, lng: p.lng, correct: p.distanceKm <= 0 })),
     };
   });
@@ -514,10 +458,22 @@ export class PlayComponent implements OnInit, OnDestroy {
       const s = this.snap();
       s?.attemptId;
       this.localOrder.set(null);
+      this.lockedAtMs.set(null);
       if (s?.state !== 'Instructions') this.readyLocal.set(false);
     });
-    // Personal elimination event: brief haptic (no sound on phones by default, §14).
-    effect(() => { if (this.rt.personalEliminated() !== null && 'vibrate' in navigator) navigator.vibrate?.([120, 60, 120]); });
+    // Remember the last published total so the header never drops to 0 mid-game.
+    effect(() => {
+      const t = this.mine().result?.tournamentTotal ?? this.myRank()?.total;
+      if (t !== undefined && t !== null) this.lastTotal.set(t);
+    });
+    // Haptics only (no sound on phones, §14): a strong pattern for elimination, a short one for the finish.
+    effect(() => { if (this.rt.personalEliminated() !== null && 'vibrate' in navigator) navigator.vibrate?.([120, 60, 120, 60, 200]); });
+    let wasFinished = false;
+    effect(() => {
+      const fin = this.rt.amFinished();
+      if (fin && !wasFinished && 'vibrate' in navigator) navigator.vibrate?.([60]);
+      wasFinished = fin;
+    });
   }
 
   ngOnInit(): void {
@@ -536,18 +492,25 @@ export class PlayComponent implements OnInit, OnDestroy {
   }
 
   placePin(p: { lat: number; lng: number }): void {
-    // optimistic draft, then save (throttled server-side; debounce here)
     this.rt.me.set({ ...this.mine(), pin: p });
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => void this.rt.sendPin(p.lat, p.lng, false).then((r) => { if (r.ok && r.state) this.rt.me.set(r.state); }), 200);
+  }
+
+  /** Active seconds since input opened, for the "locked in n s" feedback. */
+  private elapsedActiveMs(): number | null {
+    const s = this.snap();
+    if (!s?.deadlineAt || !s.roundPublic) return null;
+    return Math.max(0, s.roundPublic.durationMs - (s.deadlineAt - this.rt.now()));
   }
 
   async lockPin(): Promise<void> {
     const pin = this.mine().pin; if (!pin) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.busy.set(true); this.err.set(null);
+    const t = this.elapsedActiveMs();
     const r = await this.rt.sendPin(pin.lat, pin.lng, true);
-    if (r.ok && r.state) this.rt.me.set(r.state); else this.err.set(this.locale.t(errorKey(r.error)));
+    if (r.ok && r.state) { this.rt.me.set(r.state); this.lockedAtMs.set(t); } else this.err.set(this.locale.t(errorKey(r.error)));
     this.busy.set(false);
   }
 
@@ -562,8 +525,9 @@ export class PlayComponent implements OnInit, OnDestroy {
     if (order.length !== 4) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.busy.set(true); this.err.set(null);
+    const t = this.elapsedActiveMs();
     const r = await this.rt.sendOrder(order, true);
-    if (r.ok && r.state) this.rt.me.set(r.state); else this.err.set(this.locale.t(errorKey(r.error)));
+    if (r.ok && r.state) { this.rt.me.set(r.state); this.lockedAtMs.set(t); } else this.err.set(this.locale.t(errorKey(r.error)));
     this.busy.set(false);
   }
 

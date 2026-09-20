@@ -1,28 +1,32 @@
 /**
- * Shared large-screen display route (§4.2, plan §4).
+ * Shared large-screen display route (§4.2, plan v2 §4.3).
  *
  * No host controls. Authenticates with a display token (?token=…) issued by the
  * host dashboard. Fixed-viewport 16:9 composition: `height: 100dvh` with
  * `overflow: hidden`, one dominant visual per stage, no document scrolling.
  *
+ * Language: the display FOLLOWS the host's `displayLang` from the snapshot; the
+ * setup overlay can override it locally. All round content (country names,
+ * prompts, cards, explanations) renders in that language.
+ *
  * Everything it renders comes from the seq-ordered snapshot, so an animation
- * completing can never advance a stage — only the host can (plan §4).
+ * completing can never advance a stage — only the host can.
  */
 import { Component, computed, effect, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import QRCode from 'qrcode';
-import type { GameType, SignalColor } from '@asas/shared';
+import type { GameType, Lang, SignalColor } from '@asas/shared';
 import { GAME_ORDER, gameTitle } from '@asas/shared';
 import { RealtimeService } from '../core/realtime.service';
+import { SoundService } from '../core/sound.service';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
 import { TimerComponent } from '../shared/timer.component';
 import { HowToPlayComponent } from '../shared/how-to-play.component';
 import { PausedPanelComponent } from '../shared/paused-panel.component';
+import { PodiumComponent } from '../shared/podium.component';
 import { GlobeComponent } from '../games/globe.component';
-import { DisplayAudioService } from './display-audio.service';
 import { LeaderSummaryComponent } from './leader-summary.component';
-import { TiedLeadersComponent } from './tied-leaders.component';
 import { SetupOverlayComponent } from './setup-overlay.component';
 import { RaceArenaComponent } from './race-arena.component';
 
@@ -34,10 +38,9 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
   standalone: true,
   imports: [
     TranslatePipe, TimerComponent, HowToPlayComponent, PausedPanelComponent, GlobeComponent,
-    LeaderSummaryComponent, TiedLeadersComponent, SetupOverlayComponent, RaceArenaComponent,
+    LeaderSummaryComponent, SetupOverlayComponent, RaceArenaComponent, PodiumComponent,
   ],
   template: `
-      <!-- role-display: back-of-room type scale (plan section 9). -->
       <div class="display-root role-display">
       @if (!audio.ready()) {
         <div class="gate">
@@ -52,9 +55,15 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
           [muted]="audio.muted()"
           [volume]="volumePct()"
           [idle]="isShowing()"
+          [fullscreen]="fullscreen()"
+          [lang]="lang()"
+          [followingHost]="langOverride() === null"
+          [reducedEffects]="audio.reducedEffects()"
           (toggleMute)="audio.setMuted(!audio.muted())"
           (volumeChange)="audio.setVolume($event / 100)"
           (toggleFullscreen)="toggleFullscreen()"
+          (langChange)="setLang($event)"
+          (effectsChange)="audio.setReducedEffects($event)"
         />
 
         <header class="bar">
@@ -65,7 +74,6 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
         </header>
 
         <main class="stage">
-          <!-- PAUSED is the dominant instruction, above every game visual (plan §3). -->
           @if (s.paused) {
             <app-paused-panel [previousSignal]="signal()" />
           }
@@ -97,16 +105,37 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
             @case ('Countdown') {
               <section class="center">
                 <h2>{{ 'display.startsIn' | t: { label: roundLabel() } }}</h2>
-                <app-timer [endsAt]="s.countdownEndsAt" class="cd" />
+                <app-timer [endsAt]="s.countdownEndsAt" class="cd" (secondChanged)="onCountdownSecond($event)" />
                 @if (geoName()) { <h2>{{ 'display.find' | t: { country: geoName() } }}</h2> }
               </section>
             }
+            @case ('GameResults') {
+              <section class="results">
+                @if ((s.podiumStep ?? 0) < 4) {
+                  <h1 class="center title"><bdi>{{ 'podium.game' | t: { game: gameName() } }}</bdi></h1>
+                  <app-podium [rows]="s.standings ?? []" [step]="s.podiumStep ?? 0" [large]="true" />
+                } @else {
+                  <app-leader-summary scope="game" [gameLabel]="gameName()" [rows]="s.standings ?? []" [page]="s.standingsPage" [playedGames]="playedGames()" />
+                }
+              </section>
+            }
+            @case ('TournamentResults') {
+              <section class="results">
+                @if (s.ceremonyStep < 4) {
+                  <h1 class="center title">{{ 'podium.tournament' | t }}</h1>
+                  <app-podium [rows]="s.standings ?? []" [step]="s.ceremonyStep" [large]="true" />
+                } @else {
+                  <app-leader-summary scope="final" [rows]="s.standings ?? []" [page]="s.standingsPage" [playedGames]="playedGames()" />
+                }
+              </section>
+            }
+            @case ('Closed') { <h1 class="center">{{ 'display.thanks' | t }}</h1> }
             @default {
               @if (s.roundPublic; as rp) {
                 <div class="round-bar">
                   <span class="num">{{ roundLabel() }}</span>
                   @if (s.state === 'RoundActive') {
-                    <app-timer [endsAt]="s.deadlineAt" [frozenMs]="s.paused ? s.remainingMs : null" />
+                    <app-timer [endsAt]="s.deadlineAt" [frozenMs]="s.paused ? s.remainingMs : null" (secondChanged)="onRoundSecond($event)" />
                   }
                   @if (rp.type !== 'RLGL') {
                     <span class="num">{{ 'display.answers' | t: { count: s.responseCount, total: s.participantCount } }}</span>
@@ -115,38 +144,39 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
 
                 @switch (rp.type) {
                   @case ('RLGL') {
-                    <!-- Signal keeps dominance only while NOT paused. -->
                     @if (!s.paused) {
                       <div class="signal huge" [class.signal-green]="signal() === 'GREEN'" [class.signal-red]="signal() === 'RED'">
+                        <span aria-hidden="true">{{ signal() === 'GREEN' ? '▶' : '■' }}</span>
                         {{ (signal() === 'GREEN' ? 'signal.green.go' : 'signal.red.stop') | t }}
                       </div>
                     }
-                    <app-race-arena [race]="s.race" />
+                    <app-race-arena [race]="s.race" [burst]="burst()" />
                   }
                   @case ('GEO') {
                     <div class="geo">
                       <div>
-                        <h1>{{ 'display.find' | t: { country: rp.countryName } }}</h1>
+                        <h1>{{ 'display.find' | t: { country: geoName() } }}</h1>
                         @if (geoInsideCount() !== null) {
-                          <p class="num">{{ 'display.insideCount' | t: { count: geoInsideCount() } }}</p>
+                          <p class="num big">{{ 'display.insideCount' | t: { count: geoInsideCount() } }}</p>
                         }
+                        @if (fastestLock(); as f) { <p class="num sub">{{ 'display.speedBonus' | t: { sec: f } }}</p> }
                       </div>
-                      <app-globe [interactive]="false" [reveal]="geoReveal()" [initialScale]="1" />
+                      <app-globe [interactive]="false" [reveal]="geoReveal()" [initialScale]="1" [showYou]="false" />
                     </div>
                   }
                   @case ('ORDER') {
-                    <h1 class="prompt">{{ rp.prompt }}</h1>
-                    <p class="badge badge-lavender">{{ rp.direction }}</p>
+                    <h1 class="prompt"><bdi>{{ orderPrompt() }}</bdi></h1>
+                    <p class="badge badge-lavender"><bdi>{{ orderDirection() }}</bdi></p>
                     <ol class="cards">
                       @for (o of orderRows(); track o.id; let i = $index) {
-                        <li [class.correct]="o.revealed">
+                        <li [class.correct]="o.revealed" class="rise-in" [style.animation-delay.ms]="o.revealed ? i * 180 : 0">
                           <span class="n num">{{ i + 1 }}</span><bdi>{{ o.label }}</bdi>
                           @if (o.revealed) { <span class="chk">✓</span> }
                         </li>
                       }
                     </ol>
                     @if (orderRevealInfo(); as orv) {
-                      <p class="sub">{{ orv.explanation }} · {{ 'display.perfectAnswers' | t: { count: orv.perfectCount } }}</p>
+                      <p class="sub big"><bdi>{{ orv.explanation }}</bdi> · {{ 'display.perfectAnswers' | t: { count: orv.perfectCount } }}</p>
                     }
                   }
                 }
@@ -154,41 +184,13 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
                 @if (s.state === 'InputLocked' && !s.paused) { <p class="wait">{{ 'display.roundClosed' | t }}</p> }
                 @if (s.reveal && topFive().length) {
                   <div class="row top5">
+                    <span class="cap">{{ 'display.topFive' | t }}</span>
                     @for (t of topFive(); track $index) {
-                      <span class="badge badge-warm num"><bdi>{{ t.name }}</bdi> {{ t.score }}</span>
+                      <span class="badge badge-warm num rise-in" [style.animation-delay.ms]="$index * 150"><bdi>{{ t.name }}</bdi> · {{ t.score }} {{ 'common.pts' | t }}</span>
                     }
                   </div>
                 }
               }
-
-              @if (s.state === 'GameResults') {
-                <app-leader-summary
-                  scope="game"
-                  [gameLabel]="gameName()"
-                  [rows]="s.standings ?? []"
-                  [page]="s.standingsPage"
-                  [playedGames]="playedGames()"
-                />
-              }
-
-              @if (s.state === 'TournamentResults') {
-                @if (s.ceremonyStep < 4) {
-                  <section class="ceremony">
-                    <h1>{{ 'display.finalResults' | t }}</h1>
-                    <!-- Real ranks: ten tied leaders render as a tied band, not a fake podium. -->
-                    <app-tied-leaders [rows]="s.standings ?? []" [depth]="ceremonyDepth()" />
-                  </section>
-                } @else {
-                  <app-leader-summary
-                    scope="final"
-                    [rows]="s.standings ?? []"
-                    [page]="s.standingsPage"
-                    [playedGames]="playedGames()"
-                  />
-                }
-              }
-
-              @if (s.state === 'Closed') { <h1 class="center">{{ 'display.thanks' | t }}</h1> }
             }
           }
         </main>
@@ -200,79 +202,60 @@ const SHOW_STATES = ['Countdown', 'RoundActive', 'InputLocked', 'Reveal'];
     </div>
   `,
   styles: [`
-    /* Fixed-viewport composition: the display never scrolls in normal flow. */
-    .display-root {
-      height: 100dvh;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      background: var(--page-bg);
-    }
+    .display-root { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: var(--page-bg); }
     .gate { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; }
-
     .bar {
       display: flex; align-items: center; gap: 16px;
-      padding: 10px 32px; padding-inline-end: 72px; /* clear of the setup trigger */
+      padding: 10px 32px; padding-inline-end: 72px;
       background: var(--elm-navy); color: var(--elm-almost-white); font-size: clamp(18px, 1.6vw, 26px);
     }
     .brand { font-weight: 700; unicode-bidi: isolate; }
     .spacer { flex: 1; }
-
-    .stage {
-      flex: 1;
-      min-height: 0;
-      padding: clamp(16px, 2.4vh, 32px) clamp(20px, 3vw, 48px);
-      display: flex; flex-direction: column; gap: clamp(10px, 1.6vh, 20px);
-      overflow: hidden;
-    }
+    .stage { flex: 1; min-height: 0; padding: clamp(16px, 2.4vh, 32px) clamp(20px, 3vw, 48px); display: flex; flex-direction: column; gap: clamp(10px, 1.6vh, 20px); overflow: hidden; }
     .foot { text-align: center; padding: 6px; color: var(--elm-muted-indigo); font-size: 16px; }
-
     .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; }
+    .title { margin: 0; }
     .lobby { display: grid; grid-template-columns: 1fr auto; gap: clamp(24px, 4vw, 48px); align-items: center; flex: 1; min-height: 0; }
     .code { font-size: clamp(56px, 8vw, 96px); font-weight: 800; letter-spacing: .2em; color: var(--elm-blue); margin: 8px 0; font-variant-numeric: tabular-nums; }
     .sub { color: var(--elm-muted-indigo); }
+    .big { font-size: clamp(24px, 2.6vw, 40px); font-weight: 700; }
     .qr-frame { padding: 20px; background: #fff; border: 8px solid var(--elm-blue); border-radius: 16px; }
     .qr-frame img { width: min(34vw, 380px); height: min(34vw, 380px); display: block; }
-
     .wait { text-align: center; color: var(--elm-purple); font-weight: 600; margin: 0; }
-    .cd { font-size: clamp(90px, 16vh, 160px); color: var(--elm-peach); }
+    .cd { font-size: clamp(90px, 16vh, 160px); color: var(--elm-peach); animation: pulse-soft 1s ease-in-out infinite; }
     .round-bar { display: flex; justify-content: space-between; align-items: center; font-size: clamp(20px, 2.2vw, 32px); font-weight: 600; }
     .huge { font-size: clamp(36px, 5vw, 64px); padding: 14px; text-align: center; border-radius: 14px; }
-
     .geo { display: grid; grid-template-columns: 1fr minmax(0, 58%); gap: 32px; flex: 1; min-height: 0; align-items: center; }
-    /* Globe geometry stays physically LTR in both languages (plan §1). */
     .geo app-globe { direction: ltr; }
-
     .prompt { margin: 0; font-size: clamp(24px, 3vw, 44px); }
-    /* ORDER stays top-to-bottom and LTR-anchored so "first" never flips. */
     .cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; max-width: 900px; min-height: 0; }
-    .cards li {
-      display: flex; align-items: center; gap: 20px;
-      background: var(--elm-pale-blue); border: 2px solid var(--elm-light-blue);
-      border-radius: 12px; padding: 12px 20px;
-      font-size: clamp(20px, 2.4vw, 36px); font-weight: 600;
-    }
-    .cards li.correct { background: var(--game-go); color: var(--elm-almost-white); }
+    .cards li { display: flex; align-items: center; gap: 20px; background: var(--elm-pale-blue); border: 2px solid var(--elm-light-blue); border-radius: 12px; padding: 12px 20px; font-size: clamp(20px, 2.4vw, 36px); font-weight: 600; }
+    .cards li.correct { background: var(--game-go); color: var(--elm-almost-white); border-color: var(--game-go); }
     .n { width: 48px; height: 48px; border-radius: 50%; background: var(--elm-navy); color: var(--elm-almost-white); display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
     .chk { margin-inline-start: auto; }
-
-    .top5 { justify-content: center; flex-wrap: wrap; }
-    .ceremony { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
-    .ceremony h1 { text-align: center; margin: 0; }
-
-    app-leader-summary, app-tied-leaders { flex: 1; min-height: 0; }
-    app-race-arena { flex: 1; min-height: 0; }
+    .top5 { justify-content: center; flex-wrap: wrap; align-items: center; }
+    .cap { font-size: 0.85em; text-transform: uppercase; letter-spacing: .06em; color: var(--elm-muted-indigo); }
+    .results { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+    app-leader-summary, app-race-arena { flex: 1; min-height: 0; }
+    app-podium { flex: 1; min-height: 0; display: flex; align-items: flex-end; }
+    @media (prefers-reduced-motion: reduce) { .cd { animation: none; } }
   `],
 })
 export class DisplayComponent implements OnInit, OnDestroy {
   readonly rt = inject(RealtimeService);
-  readonly audio = inject(DisplayAudioService);
+  readonly audio = inject(SoundService);
   private readonly locale = inject(LocaleService);
   private readonly route = inject(ActivatedRoute);
 
   readonly token = this.route.snapshot.queryParamMap.get('token');
   readonly snap = this.rt.snapshot;
   readonly qr = signal<string | null>(null);
+  readonly fullscreen = signal(false);
+  /** Local language override from the setup overlay; null = follow the host. */
+  readonly langOverride = signal<Lang | null>(null);
+  readonly lang = computed<Lang>(() => this.langOverride() ?? this.snap()?.displayLang ?? 'en');
+  /** Aggregated elimination burst shown by the arena (plan v2 §5.11). */
+  readonly burst = signal<{ names: string[]; count: number; at: number } | null>(null);
 
   readonly volumePct = computed(() => Math.round(this.audio.volume() * 100));
   readonly isShowing = computed(() => {
@@ -285,7 +268,6 @@ export class DisplayComponent implements OnInit, OnDestroy {
     return g ? gameTitle(g, this.locale.lang()) : '';
   });
 
-  /** Localized "Practice" / "Round n of m" heading. */
   readonly roundLabel = computed(() => {
     const s = this.snap();
     if (!s) return '';
@@ -293,9 +275,22 @@ export class DisplayComponent implements OnInit, OnDestroy {
     return this.locale.t('play.round', { n: s.roundNumber, total: s.roundCount });
   });
 
+  private ar(): boolean { return this.locale.lang() === 'ar'; }
+
   readonly geoName = computed(() => {
     const rp = this.snap()?.roundPublic;
-    return rp?.type === 'GEO' ? rp.countryName : '';
+    if (rp?.type !== 'GEO') return '';
+    return this.ar() ? rp.countryNameAr || rp.countryName : rp.countryName;
+  });
+  readonly orderPrompt = computed(() => {
+    const rp = this.snap()?.roundPublic;
+    if (rp?.type !== 'ORDER') return '';
+    return this.ar() ? rp.promptAr || rp.prompt : rp.prompt;
+  });
+  readonly orderDirection = computed(() => {
+    const rp = this.snap()?.roundPublic;
+    if (rp?.type !== 'ORDER') return '';
+    return this.ar() ? rp.directionAr || rp.direction : rp.direction;
   });
 
   readonly signal = computed<SignalColor>(() => {
@@ -315,41 +310,43 @@ export class DisplayComponent implements OnInit, OnDestroy {
     return r?.type === 'GEO' ? r.insideCount : null;
   });
 
+  /** Fastest manual lock among in-country pins, in seconds — the speed bonus made visible. */
+  readonly fastestLock = computed<string | null>(() => {
+    const r = this.snap()?.reveal;
+    if (r?.type !== 'GEO') return null;
+    const times = r.pins.filter((p) => p.inside && typeof p.timeMs === 'number').map((p) => p.timeMs as number);
+    return times.length ? (Math.min(...times) / 1000).toFixed(1) : null;
+  });
+
   readonly orderRevealInfo = computed<{ explanation: string; perfectCount: number } | null>(() => {
     const r = this.snap()?.reveal;
-    return r?.type === 'ORDER' ? { explanation: r.explanation, perfectCount: r.perfectCount } : null;
+    if (r?.type !== 'ORDER') return null;
+    return { explanation: this.ar() ? r.explanationAr || r.explanation : r.explanation, perfectCount: r.perfectCount };
   });
 
   readonly orderRows = computed(() => {
     const s = this.snap();
     const rp = s?.roundPublic;
     if (rp?.type !== 'ORDER') return [];
-    // Correct order is only known after the host reveals [secure-coding].
+    const ar = this.ar();
+    const label = (o: { label: string; labelAr: string }) => (ar ? o.labelAr || o.label : o.label);
     if (s?.reveal?.type === 'ORDER') {
-      const byId = new Map(rp.options.map((o) => [o.id, o.label]));
+      const byId = new Map(rp.options.map((o) => [o.id, label(o)]));
       return s.reveal.correctOrder.map((id) => ({ id, label: byId.get(id) ?? '', revealed: true }));
     }
-    return rp.options.map((o) => ({ ...o, revealed: false }));
+    return rp.options.map((o) => ({ id: o.id, label: label(o), revealed: false }));
   });
 
   readonly geoReveal = computed(() => {
     const rv = this.snap()?.reveal;
     if (rv?.type !== 'GEO') return null;
-    const g = rv as unknown as {
-      geometry?: { type: 'MultiPolygon'; coordinates: number[][][][] } | null;
-      center?: { lat: number; lng: number } | null;
-    };
     return {
-      geometry: g.geometry ?? null,
-      center: g.center ?? null,
+      geometry: rv.geometry ?? null,
+      center: rv.center ?? null,
       pins: rv.pins.map((p) => ({ lat: p.lat, lng: p.lng, correct: p.distanceKm <= 0 })),
     };
   });
 
-  /**
-   * Which games have actually been played. An unplayed game shows "—" on the
-   * standings while still contributing its real 0 to `total` (plan §4).
-   */
   readonly playedGames = computed<GameType[]>(() => {
     const s = this.snap();
     if (!s) return [];
@@ -357,62 +354,99 @@ export class DisplayComponent implements OnInit, OnDestroy {
     return GAME_ORDER.filter((_g, i) => i < s.gameIndex || (i === s.gameIndex && done));
   });
 
-  /** Ceremony steps 1-3 reveal third, second, then first place. */
-  readonly ceremonyDepth = computed(() => {
-    const step = this.snap()?.ceremonyStep ?? 0;
-    if (step <= 0) return 0;
-    return Math.min(3, step);
-  });
-
   constructor() {
     this.locale.init('display');
     let lastSig = -1;
-    let lastElim = -1;
     let lastState = '';
     let lastStep = -1;
+    let lastPodium = -1;
+    let lastJoin = '';
+    let lastFinished = 0;
+    let burstTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastElimEvent = -1;
+    let pendingBurst: { names: string[]; count: number } | null = null;
+    let burstDebounce: ReturnType<typeof setTimeout> | null = null;
+
+    // The display's language follows the host unless overridden locally.
+    effect(() => { const l = this.lang(); if (l !== this.locale.lang()) this.locale.set(l); });
 
     effect(() => {
       const ev = this.rt.lastSignal();
       if (ev && ev.eventId !== lastSig) {
         lastSig = ev.eventId;
-        if (ev.color === 'GREEN') this.audio.go();
-        else this.audio.red();
+        this.audio.play(ev.color === 'GREEN' ? 'go' : 'stop');
       }
     });
+    // Simultaneous deaths aggregate into ONE burst + one sound (plan v2 §5.11).
     effect(() => {
       const ev = this.rt.elimination();
-      if (ev && ev.eventId !== lastElim) {
-        lastElim = ev.eventId;
-        this.audio.elimination();
-      }
+      const feed = this.snap()?.race?.eliminationsFeed ?? [];
+      if (!ev || ev.eventId === lastElimEvent) return;
+      lastElimEvent = ev.eventId;
+      const names = feed.find((f) => f.eventId === ev.eventId)?.names ?? [];
+      pendingBurst = { names: [...(pendingBurst?.names ?? []), ...names], count: (pendingBurst?.count ?? 0) + ev.count };
+      if (burstDebounce) clearTimeout(burstDebounce);
+      burstDebounce = setTimeout(() => {
+        const b = pendingBurst; pendingBurst = null;
+        if (!b) return;
+        this.audio.play(b.count >= 3 ? 'eliminationBurst' : 'elimination');
+        this.burst.set({ ...b, at: Date.now() });
+        if (burstTimer) clearTimeout(burstTimer);
+        burstTimer = setTimeout(() => this.burst.set(null), 1800);
+      }, 300);
     });
     effect(() => {
       const s = this.snap();
       if (!s) return;
       if (s.state !== lastState) {
         lastState = s.state;
-        if (s.state === 'Reveal') this.audio.reveal();
-        if (s.state === 'RoundActive') this.audio.go();
+        if (s.state === 'Reveal') this.audio.play('reveal');
+        if (s.state === 'RoundActive') this.audio.play('start');
+        if (s.state === 'GameResults' || s.state === 'TournamentResults') { lastPodium = -1; lastStep = -1; }
       }
+      const finished = s.race?.players.filter((p) => p.state === 'finished').length ?? 0;
+      if (s.state === 'RoundActive' && finished > lastFinished) this.audio.play('finish');
+      lastFinished = s.state === 'RoundActive' ? finished : 0;
       if (s.state === 'TournamentResults' && s.ceremonyStep !== lastStep) {
         lastStep = s.ceremonyStep;
-        if (s.ceremonyStep >= 1 && s.ceremonyStep <= 3) this.audio.fanfare();
+        if (s.ceremonyStep === 3) this.audio.play('fanfare');
+        else if (s.ceremonyStep >= 1 && s.ceremonyStep <= 2) this.audio.play('podium');
       }
-      if (s.state === 'Lobby' && !this.qr()) void this.makeQr(s.joinCode);
+      const ps = s.podiumStep ?? 0;
+      if (s.state === 'GameResults' && ps !== lastPodium) {
+        lastPodium = ps;
+        if (ps === 3) this.audio.play('fanfare');
+        else if (ps >= 1 && ps <= 2) this.audio.play('podium');
+      }
+      // The QR follows the join code (a reopened session must never show a stale code).
+      if (s.state === 'Lobby' && s.joinCode !== lastJoin) { lastJoin = s.joinCode; void this.makeQr(s.joinCode); }
     });
   }
 
   ngOnInit(): void {
     if (this.token) this.rt.connectDisplay(this.token);
+    document.addEventListener('fullscreenchange', () => this.fullscreen.set(!!document.fullscreenElement));
   }
 
   ngOnDestroy(): void {
     this.rt.disconnect();
   }
 
+  onCountdownSecond(s: number): void {
+    if (s >= 1 && s <= 3) this.audio.play('countdownTick');
+  }
+
+  onRoundSecond(s: number): void {
+    if (s >= 1 && s <= 3) this.audio.play('countdownTick');
+  }
+
+  setLang(l: Lang | null): void {
+    this.langOverride.set(l);
+  }
+
   async start(): Promise<void> {
     await this.audio.init();
-    this.audio.test();
+    this.audio.play('test');
     try {
       await document.documentElement.requestFullscreen?.();
     } catch {
