@@ -4,6 +4,7 @@ import { RehearsalController } from '../rehearsal/rehearsal.controller';
 import { SimulationService } from '../rehearsal/simulation.service';
 import { SessionsModule } from '../sessions/sessions.module';
 import { HostGuard } from '../sessions/host.guard';
+import { ParticipantsController } from '../sessions/participants.controller';
 import { ExportsController, HostActionsController } from './rounds.controller';
 import { LiveRuntime } from './live-runtime';
 import { ParticipationService } from './participation.service';
@@ -15,7 +16,7 @@ import { StandingsService } from './standings.service';
 
 @Module({
   imports: [SessionsModule],
-  controllers: [HostActionsController, ExportsController, RehearsalController],
+  controllers: [HostActionsController, ExportsController, RehearsalController, ParticipantsController],
   providers: [
     RoundRepo,
     LiveRuntime,

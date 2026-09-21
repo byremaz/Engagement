@@ -33,8 +33,18 @@ export class ApiService {
   preview(code: string) {
     return firstValueFrom(this.http.get<{ session: PublicSession; participantCount: number }>(`/v1/join/${encodeURIComponent(code)}`));
   }
-  join(code: string, name: string) {
-    return firstValueFrom(this.http.post<JoinResponse>(`/v1/join/${encodeURIComponent(code)}/participants`, { name }));
+  join(code: string, name: string, avatar?: string) {
+    return firstValueFrom(
+      this.http.post<JoinResponse>(`/v1/join/${encodeURIComponent(code)}/participants`, avatar ? { name, avatar } : { name }),
+    );
+  }
+  /** Change the avatar after joining — authenticated by the participant token. */
+  changeAvatar(token: string, avatar: string) {
+    return firstValueFrom(
+      this.http.patch<{ avatar: string }>('/v1/participants/me/avatar', { avatar }, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
   }
   restore(code: string, recoveryCode: string) {
     return firstValueFrom(this.http.post<RestoreResponse>(`/v1/join/${encodeURIComponent(code)}/restorations`, { recoveryCode }));

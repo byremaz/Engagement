@@ -73,7 +73,7 @@ export class JoinController {
   @Post(':code/participants')
   @HttpCode(201)
   join(@Param('code') code: string, @Body() dto: JoinSessionDto, @Req() req: Request) {
-    return this.sessions.join(sanitizeCode(code), dto.name, detectDevice(req.headers));
+    return this.sessions.join(sanitizeCode(code), dto.name, detectDevice(req.headers), dto.avatar);
   }
 
   /** POST /v1/join/:code/restorations - recover identity with the private code. */

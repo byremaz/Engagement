@@ -1,3 +1,4 @@
+import { AVATARS } from '@asas/shared';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
 
 export class CreateSessionDto {
@@ -18,6 +19,16 @@ export class JoinSessionDto {
   @Length(2, 24)
   @Matches(/^[^\p{C}<>]+$/u, { message: 'name must not contain control characters or angle brackets' })
   name!: string;
+
+  /** Optional avatar pick — must be in the shared allow-list, otherwise the server assigns one. */
+  @IsOptional()
+  @IsIn(AVATARS as readonly string[])
+  avatar?: string;
+}
+
+export class SetAvatarDto {
+  @IsIn(AVATARS as readonly string[], { message: 'avatar must be one of the allowed characters' })
+  avatar!: string;
 }
 
 export class RestoreDto {

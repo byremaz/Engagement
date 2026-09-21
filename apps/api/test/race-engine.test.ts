@@ -4,12 +4,25 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RLGL_RED_TOLERANCE_MS, RLGL_TRACK_LENGTH } from '@asas/shared';
+import { RLGL_MISTAKE_GRACE_MS, RLGL_RED_TOLERANCE_MS, RLGL_TRACK_LENGTH } from '@asas/shared';
 import { RaceEngine } from '../src/games/race-engine';
 
 const T0 = 1_000_000;
 /** Phones send hold heartbeats well inside the 500 ms stale-hold window (§6.9). */
 const HEARTBEAT_MS = 250;
+
+/**
+ * A press on established RED that is still held past the forgiveness window → fatal.
+ * Sends hold heartbeats inside the window (as the phone would) so the hold
+ * never goes stale before the grace expires.
+ */
+function pressOnRed(e: RaceEngine, id: string, at: number) {
+  let ev = e.input(id, true, at); // mistake: opens the grace window
+  for (let t = at + HEARTBEAT_MS; t < at + RLGL_MISTAKE_GRACE_MS; t += HEARTBEAT_MS) {
+    ev = e.input(id, true, t) ?? ev;
+  }
+  return e.input(id, true, at + RLGL_MISTAKE_GRACE_MS) ?? ev; // still held when it expires
+}
 
 function engine(ids: string[] = ['a', 'b']): RaceEngine {
   return new RaceEngine(ids, T0);
@@ -74,11 +87,11 @@ describe('RaceEngine movement (§6.4)', () => {
 });
 
 describe('RaceEngine elimination (§6.4, §6.9)', () => {
-  it('eliminates a new press on established RED and reports each victim once', () => {
+  it('eliminates a new press on established RED held past the grace window, once', () => {
     const e = engine(['a', 'b']);
     const redAt = T0 + 1_000;
-    // Already RED from the start; a fresh press well after tolerance is fatal.
-    const ev = e.input('a', true, redAt + RLGL_RED_TOLERANCE_MS + 1);
+    // Already RED from the start; a fresh press held past the forgiveness window is fatal.
+    const ev = pressOnRed(e, 'a', redAt + RLGL_RED_TOLERANCE_MS + 1);
     assert.ok(ev);
     assert.deepEqual(ev!.participantIds, ['a']);
     assert.equal(e.players.get('a')!.state, 'eliminated');
@@ -136,10 +149,35 @@ describe('RaceEngine elimination (§6.4, §6.9)', () => {
  * reviving) is proven in `packages/shared/test/life.test.ts`.
  */
 describe('Section 9.9 required scenarios', () => {
+  it('forgives a mistaken press on RED that is released within the grace window', () => {
+    const e = engine(['a']);
+    const at = T0 + RLGL_RED_TOLERANCE_MS + 1_000; // RED long established
+    assert.equal(e.input('a', true, at), null, 'the mistake itself does not kill');
+    // Released just inside the forgiveness window: still alive.
+    e.input('a', false, at + RLGL_MISTAKE_GRACE_MS - 50);
+    e.tick(at + 2_000);
+    assert.equal(e.players.get('a')!.state, 'alive');
+    assert.equal(e.eliminations.length, 0);
+    // No distance was ever granted for the mistaken press.
+    assert.equal(e.players.get('a')!.progress, 0);
+  });
+
+  it('eliminates via tick when a mistaken press outlives its grace window', () => {
+    const e = engine(['a']);
+    const at = T0 + RLGL_RED_TOLERANCE_MS + 1_000;
+    e.input('a', true, at);
+    // Phone keeps heartbeating the (mistaken) hold so it never goes stale.
+    for (let t = at + HEARTBEAT_MS; t < at + RLGL_MISTAKE_GRACE_MS - 1; t += HEARTBEAT_MS) e.input('a', true, t);
+    assert.equal(e.tick(at + RLGL_MISTAKE_GRACE_MS - 1), null, 'still inside the window');
+    const ev = e.tick(at + RLGL_MISTAKE_GRACE_MS);
+    assert.ok(ev);
+    assert.equal(e.players.get('a')!.death?.reason, 'new press on red');
+  });
+
   it('keeps the player dead when the signal changes again after death', () => {
     const e = engine(['a']);
     // Killed by a fresh press on established red.
-    e.input('a', true, T0 + RLGL_RED_TOLERANCE_MS + 1);
+    pressOnRed(e, 'a', T0 + RLGL_RED_TOLERANCE_MS + 1);
     assert.equal(e.players.get('a')!.state, 'eliminated');
 
     // The race continues: green, red, green again.
@@ -159,7 +197,7 @@ describe('Section 9.9 required scenarios', () => {
 
   it('holding through green does not revive an already-eliminated player', () => {
     const e = engine(['a']);
-    e.input('a', true, T0 + RLGL_RED_TOLERANCE_MS + 1);
+    pressOnRed(e, 'a', T0 + RLGL_RED_TOLERANCE_MS + 1);
     e.setSignal('GREEN', T0 + 2_000, 'MANUAL');
     hold(e, 'a', T0 + 2_000, T0 + 12_000);
     assert.equal(e.players.get('a')!.state, 'eliminated');
@@ -168,7 +206,7 @@ describe('Section 9.9 required scenarios', () => {
 
   it('a new attempt restores eligibility, and only a new attempt does', () => {
     const dead = engine(['a']);
-    dead.input('a', true, T0 + RLGL_RED_TOLERANCE_MS + 1);
+    pressOnRed(dead, 'a', T0 + RLGL_RED_TOLERANCE_MS + 1);
     assert.equal(dead.players.get('a')!.state, 'eliminated');
 
     // A new host-authorized attempt is a NEW engine: the only sanctioned path
@@ -185,7 +223,7 @@ describe('Section 9.9 required scenarios', () => {
     hold(e, 'a', T0, T0 + 2_000);
     e.input('a', false, T0 + 2_000);
     e.setSignal('RED', T0 + 3_000, 'MANUAL');
-    e.input('b', true, T0 + 3_000 + RLGL_RED_TOLERANCE_MS + 1);
+    pressOnRed(e, 'b', T0 + 3_000 + RLGL_RED_TOLERANCE_MS + 1);
 
     const a = e.players.get('a')!;
     const b = e.players.get('b')!;
@@ -198,7 +236,7 @@ describe('Section 9.9 required scenarios', () => {
 
   it('the last survivor is not auto-declared a finisher', () => {
     const e = engine(['a', 'b']);
-    e.input('b', true, T0 + RLGL_RED_TOLERANCE_MS + 1);
+    pressOnRed(e, 'b', T0 + RLGL_RED_TOLERANCE_MS + 1);
     assert.equal(e.players.get('b')!.state, 'eliminated');
     // One player remains, mid-track: the race continues until they finish or
     // time runs out, so they must not be marked finished here.

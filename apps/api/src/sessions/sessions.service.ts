@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { DeviceInfo, Lang, ParticipantHostView, SessionState } from '@asas/shared';
-import { defaultFrozenContent } from '@asas/shared';
+import { defaultAvatarFor, defaultFrozenContent, isAllowedAvatar } from '@asas/shared';
 import type { FrozenContent } from '@asas/shared';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { DbService } from '../db/db.service';
@@ -66,8 +66,6 @@ export interface RestoreResult {
   token: string;
   controllerTransferred: boolean;
 }
-
-const AVATARS = ['🦊', '🐼', '🦁', '🐸', '🐙', '🦉', '🐧', '🦄', '🐢', '🐝', '🦋', '🐬', '🦜', '🐨', '🦖', '🐳'];
 
 @Injectable()
 export class SessionsService {
@@ -161,7 +159,7 @@ export class SessionsService {
 
   // ------------------------------------------------------------ participants
 
-  async join(joinCode: string, name: string, device: DeviceInfo): Promise<JoinResult> {
+  async join(joinCode: string, name: string, device: DeviceInfo, chosenAvatar?: string): Promise<JoinResult> {
     const session = await this.getByJoinCode(joinCode);
     if (!session.join_open || session.state === 'Closed') {
       throw new ForbiddenException('joining is closed');
@@ -185,7 +183,8 @@ export class SessionsService {
         [session.id],
       );
       const number = (maxRes.rows[0]?.m ?? 0) + 1;
-      const avatar = AVATARS[(number - 1) % AVATARS.length] ?? AVATARS[0]!;
+      // Allow-list only: anything else falls back to the deterministic default (§secure input).
+      const avatar = isAllowedAvatar(chosenAvatar) ? chosenAvatar : defaultAvatarFor(number);
       const res = await client.query<ParticipantRow>(
         `INSERT INTO participants (session_id, number, name, avatar, recovery_hash, controller_id, device, device_history, connected)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, true)
@@ -286,6 +285,17 @@ export class SessionsService {
     );
     if (res.length === 0) throw new NotFoundException('participant not found');
     await this.audit(sessionId, 'REMOVE_PARTICIPANT', { participantId });
+  }
+
+  /** Change the participant's avatar after joining — allow-list enforced, display-only property. */
+  async setAvatar(participantId: string, avatar: string): Promise<{ sessionId: string; avatar: string }> {
+    if (!isAllowedAvatar(avatar)) throw new ForbiddenException('avatar not in the allowed list');
+    const row = await this.db.one<{ session_id: string; avatar: string }>(
+      'UPDATE participants SET avatar = $2 WHERE id = $1 AND removed_at IS NULL RETURNING session_id, avatar',
+      [participantId, avatar],
+    );
+    if (!row) throw new NotFoundException('participant not found');
+    return { sessionId: row.session_id, avatar: row.avatar };
   }
 
   async setReady(participantId: string, ready: boolean): Promise<void> {

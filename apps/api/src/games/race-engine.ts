@@ -6,6 +6,7 @@
 import type { RaceLifeState, SignalColor, SignalMode } from '@asas/shared';
 import {
   RLGL_HEARTBEAT_TIMEOUT_MS,
+  RLGL_MISTAKE_GRACE_MS,
   RLGL_RED_TOLERANCE_MS,
   RLGL_SPEED_UNITS_PER_SEC,
   RLGL_TRACK_LENGTH,
@@ -22,6 +23,8 @@ export interface RacePlayer {
   finishedAt: number | null;
   /** Active (unpaused) ms from race start to the finish line — the v2 speed input. */
   finishActiveMs: number | null;
+  /** Deadline of the forgiveness window for a mistaken press on RED (null = none). */
+  redGraceUntil: number | null;
   death: { at: number; reason: string; signalEventId: number } | null;
 }
 
@@ -66,6 +69,7 @@ export class RaceEngine {
         lastHeartbeat: null,
         finishedAt: null,
         finishActiveMs: null,
+        redGraceUntil: null,
         death: null,
       });
     }
@@ -94,6 +98,7 @@ export class RaceEngine {
       for (const p of this.players.values()) {
         p.holding = false;
         p.holdSince = null;
+        p.redGraceUntil = null;
       }
     } else {
       this.lastTick = now;
@@ -104,11 +109,16 @@ export class RaceEngine {
   input(participantId: string, holding: boolean, now: number): EliminationEvent | null {
     const p = this.players.get(participantId);
     if (!p || p.state !== 'alive' || this.paused) return null;
-    this.tick(now);
+    const tickEv = this.tick(now);
+    // The catch-up tick may itself have eliminated this player (e.g. a
+    // mistaken press whose grace window just expired): report it, don't
+    // keep mutating a dead player.
+    if (p.state !== 'alive') return tickEv;
     const sig = this.signal;
     if (!holding) {
       p.holding = false;
       p.holdSince = null;
+      p.redGraceUntil = null; // released in time: the mistake is forgiven
       p.lastHeartbeat = now;
       return null;
     }
@@ -116,8 +126,19 @@ export class RaceEngine {
     if (sig.color === 'RED') {
       const inTolerance = now - sig.effectiveAt < this.redToleranceMs;
       const newPress = !p.holding;
-      // New press during established red, or continuing hold after the shared tolerance → eliminated (§6.4).
-      if (newPress && now >= sig.effectiveAt && !inTolerance) return this.eliminate([p], now, 'new press on red');
+      // A NEW press during established red is a mistake, but no longer instantly
+      // fatal: the racer gets a short grace window to release (forgiveness margin).
+      if (newPress && now >= sig.effectiveAt && !inTolerance) {
+        p.holding = true;
+        p.holdSince = null;
+        p.redGraceUntil = now + RLGL_MISTAKE_GRACE_MS;
+        return null;
+      }
+      // Still holding a mistaken press when its grace window expires → eliminated.
+      if (!newPress && p.redGraceUntil !== null) {
+        if (now >= p.redGraceUntil) return this.eliminate([p], now, 'new press on red');
+        return null;
+      }
       if (!newPress && !inTolerance) return this.eliminate([p], now, 'continued hold on red');
       // Within tolerance: stop movement, no distance granted, no death yet.
       p.holding = true;
@@ -128,6 +149,7 @@ export class RaceEngine {
       p.holding = true;
       p.holdSince = Math.max(now, sig.effectiveAt);
     }
+    p.redGraceUntil = null; // GREEN made the hold legal
     return null;
   }
 
@@ -141,17 +163,25 @@ export class RaceEngine {
     this.activeMs += now - this.lastTick;
     const sig = this.signal;
     const victims: RacePlayer[] = [];
+    const graceVictims: RacePlayer[] = [];
     for (const p of this.players.values()) {
       if (p.state !== 'alive' || !p.holding) continue;
       if (p.lastHeartbeat !== null && now - p.lastHeartbeat > RLGL_HEARTBEAT_TIMEOUT_MS) {
         p.holding = false;
         p.holdSince = null;
+        p.redGraceUntil = null; // stale hold = released: the mistake is forgiven
         continue;
       }
       if (sig.color === 'RED') {
+        if (p.redGraceUntil !== null) {
+          // Mistaken press: only fatal once its own grace window has expired.
+          if (now >= p.redGraceUntil) graceVictims.push(p);
+          continue;
+        }
         if (now - sig.effectiveAt >= this.redToleranceMs) victims.push(p);
         continue;
       }
+      p.redGraceUntil = null; // GREEN made the hold legal
       const from = Math.max(this.lastTick, p.holdSince ?? this.lastTick, sig.effectiveAt);
       const dt = Math.max(0, now - from) / 1000;
       p.progress = Math.min(RLGL_TRACK_LENGTH, p.progress + dt * this.speed);
@@ -163,7 +193,13 @@ export class RaceEngine {
       }
     }
     this.lastTick = now;
-    return victims.length ? this.eliminate(victims, now, 'continued hold on red') : null;
+    const graceEv = graceVictims.length ? this.eliminate(graceVictims, now, 'new press on red') : null;
+    const redEv = victims.length ? this.eliminate(victims, now, 'continued hold on red') : null;
+    if (graceEv && redEv) {
+      // Both kinds died on the same tick: report every victim in one event.
+      return { eventId: redEv.eventId, participantIds: [...graceEv.participantIds, ...redEv.participantIds], at: now };
+    }
+    return redEv ?? graceEv;
   }
 
   /** Race closes when no living, unfinished player remains (§6.4). */

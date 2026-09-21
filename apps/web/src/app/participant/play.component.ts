@@ -9,7 +9,8 @@ import { Component, computed, effect, inject, OnDestroy, OnInit, signal, untrack
 import { Router } from '@angular/router';
 import { NgTemplateOutlet } from '@angular/common';
 import type { SignalColor, StandingRow } from '@asas/shared';
-import { ORDER_POINTS_PER_CARD, ORDER_POINTS_PER_CARD_V2, SCORING_RULE_VERSION, gameTitle } from '@asas/shared';
+import { AVATARS, ORDER_POINTS_PER_CARD, ORDER_POINTS_PER_CARD_V2, SCORING_RULE_VERSION, gameTitle } from '@asas/shared';
+import { ApiService } from '../core/api.service';
 import { LocaleService } from '../i18n/locale.service';
 import { TranslatePipe } from '../i18n/t.pipe';
 import type { StringKey } from '../i18n/strings.en';
@@ -19,7 +20,7 @@ import { RoundResultCardComponent } from '../shared/round-result-card.component'
 import { StandingsTableComponent } from '../shared/standings-table.component';
 import { PodiumComponent } from '../shared/podium.component';
 import { RealtimeService, emptyMe } from '../core/realtime.service';
-import { loadIdentity, clearIdentity, StoredIdentity } from '../core/storage';
+import { loadIdentity, clearIdentity, saveIdentity, StoredIdentity } from '../core/storage';
 import { TimerComponent } from '../shared/timer.component';
 import { HowToPlayComponent } from '../shared/how-to-play.component';
 import { HoldButtonComponent } from '../games/hold-button.component';
@@ -44,7 +45,8 @@ import { PersonalPodiumComponent } from './personal-podium.component';
     @if (id(); as ident) {
       <main class="page role-participant">
         <header class="row hdr">
-          <span class="avatar" aria-hidden="true">{{ ident.avatar }}</span>
+          <button type="button" class="avatar avatar-btn" (click)="avatarPickerOpen.set(!avatarPickerOpen())"
+            [attr.aria-label]="'play.avatar.change' | t" [attr.aria-expanded]="avatarPickerOpen()">{{ ident.avatar }}</button>
           <div class="who">
             <strong><bdi>{{ ident.name }}</bdi></strong>
             <div class="small muted"><bdi>{{ 'play.header.player' | t: { number: ident.number } }}</bdi></div>
@@ -56,6 +58,21 @@ import { PersonalPodiumComponent } from './personal-podium.component';
           <span class="pts num" [attr.aria-label]="'common.points' | t"><bdi>{{ myPoints() }}</bdi> <span class="small muted">{{ 'common.pts' | t }}</span></span>
           <button class="btn btn-secondary help" (click)="help.set(!help())" [attr.aria-label]="'common.help' | t">?</button>
         </header>
+
+        @if (avatarPickerOpen()) {
+          <section class="card stack" aria-live="polite">
+            <h2 class="small" style="margin:0">{{ 'play.avatar.pick' | t }}</h2>
+            <div class="avatar-grid" role="radiogroup" [attr.aria-label]="'play.avatar.pick' | t">
+              @for (a of avatars; track a) {
+                <button type="button" class="avatar-cell" [class.on]="ident.avatar === a" role="radio"
+                  [attr.aria-checked]="ident.avatar === a" [disabled]="avatarBusy()"
+                  (click)="pickAvatar(a)">{{ a }}</button>
+              }
+            </div>
+            @if (avatarError()) { <div class="alert alert-error" role="alert">{{ 'play.avatar.error' | t }}</div> }
+            <button class="btn btn-secondary" (click)="avatarPickerOpen.set(false)">{{ 'common.close' | t }}</button>
+          </section>
+        }
 
         @switch (rt.conn()) {
           @case ('disconnected') { <div class="alert alert-warn" role="alert">⚠ {{ 'play.conn.lost' | t }}</div> }
@@ -267,6 +284,13 @@ import { PersonalPodiumComponent } from './personal-podium.component';
   styles: [`
     .hdr { position: sticky; top: 0; z-index: 5; background: var(--page-bg); padding-block: 4px; }
     .avatar { font-size: 28px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; background: var(--elm-pale-blue); border-radius: 50%; border: 2px solid var(--elm-light-blue); flex: 0 0 auto; }
+    .avatar-btn { cursor: pointer; padding: 0; font-family: inherit; }
+    .avatar-btn:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+    .avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: var(--space-1); }
+    .avatar-cell { min-height: 52px; font-size: 26px; cursor: pointer; font-family: inherit; background: var(--elm-pale-blue); border: 2px solid transparent; border-radius: var(--radius-md, 12px); }
+    .avatar-cell.on { border-color: var(--elm-navy); background: var(--elm-peach); }
+    .avatar-cell:disabled { opacity: 0.6; cursor: default; }
+    .avatar-cell:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
     .who { min-width: 0; }
     .who strong { display: block; max-width: 22vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pts { font-weight: 800; font-size: 18px; white-space: nowrap; }
@@ -279,9 +303,15 @@ import { PersonalPodiumComponent } from './personal-podium.component';
 export class PlayComponent implements OnInit, OnDestroy {
   readonly rt = inject(RealtimeService);
   readonly locale = inject(LocaleService);
+  private readonly api = inject(ApiService);
   private readonly router = inject(Router);
 
   readonly id = signal<StoredIdentity | null>(null);
+  /** Avatar picker (display-only property; server enforces the allow-list). */
+  readonly avatars = AVATARS;
+  readonly avatarPickerOpen = signal(false);
+  readonly avatarBusy = signal(false);
+  readonly avatarError = signal(false);
   readonly snap = this.rt.snapshot;
   /** Private per-round state for this participant (server-authoritative). */
   readonly mine = computed(() => this.rt.me() ?? emptyMe());
@@ -542,6 +572,28 @@ export class PlayComponent implements OnInit, OnDestroy {
   }
 
   leave(): void { this.rt.disconnect(); clearIdentity(); void this.router.navigateByUrl('/'); }
+
+  /** Change the avatar server-side, then mirror it into the stored identity. */
+  async pickAvatar(avatar: string): Promise<void> {
+    const ident = this.id();
+    if (!ident || this.avatarBusy() || ident.avatar === avatar) {
+      this.avatarPickerOpen.set(false);
+      return;
+    }
+    this.avatarBusy.set(true);
+    this.avatarError.set(false);
+    try {
+      const r = await this.api.changeAvatar(ident.token, avatar);
+      const updated = { ...ident, avatar: r.avatar };
+      saveIdentity(updated);
+      this.id.set(updated);
+      this.avatarPickerOpen.set(false);
+    } catch {
+      this.avatarError.set(true);
+    } finally {
+      this.avatarBusy.set(false);
+    }
+  }
 }
 
 function errorKey(e?: string): StringKey {

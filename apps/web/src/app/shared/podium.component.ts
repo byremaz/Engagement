@@ -62,17 +62,35 @@ const MAX_FACES = 6;
     .pts { font-size: 22px; font-weight: 900; }
     .waiting { color: var(--elm-muted-indigo); text-align: center; margin: auto; }
 
-    .large .podium, .large { gap: 24px; min-height: 0; }
-    .large .place { max-width: 30%; padding: 24px 18px 28px; border-width: 4px; }
-    .large .p1 { min-height: 340px; }
-    .large .p2 { min-height: 280px; }
-    .large .p3 { min-height: 240px; }
-    .large .rank { font-size: 64px; }
-    .large .label { font-size: 22px; }
-    .large .avatar { font-size: 64px; }
-    .large .name { font-size: clamp(22px, 2vw, 34px); max-width: 14ch; }
-    .large .pts { font-size: clamp(32px, 3vw, 48px); }
-    .large .faces { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 10px 18px; }
+    /* Display (large) mode: relative sizes so the podium fills the screen and
+       long names WRAP (two lines) instead of spilling out of the column. */
+    .large .podium, .large { gap: clamp(16px, 2.5vw, 40px); min-height: 0; }
+    .large .place {
+      flex: 1 1 0; min-width: 0; width: min(30vw, 420px); max-width: min(30vw, 420px);
+      padding: clamp(16px, 2.2vh, 28px) clamp(12px, 1.4vw, 24px) clamp(18px, 2.6vh, 32px);
+      border-width: 4px; border-radius: clamp(14px, 1.6vw, 24px) clamp(14px, 1.6vw, 24px) 6px 6px;
+      gap: clamp(6px, 1vh, 12px); overflow: hidden;
+    }
+    .large .p1 { min-height: min(44vh, 420px); }
+    .large .p2 { min-height: min(36vh, 340px); }
+    .large .p3 { min-height: min(31vh, 290px); }
+    .large .rank { font-size: clamp(40px, 6vh, 72px); }
+    .large .label { font-size: clamp(14px, 2.2vh, 24px); }
+    .large .avatar { font-size: clamp(40px, 6vh, 72px); }
+    .large .name {
+      font-size: clamp(18px, 2.6vh, 32px); max-width: 100%; min-width: 0;
+      white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      line-height: 1.2; text-overflow: ellipsis;
+    }
+    .large .pts { font-size: clamp(26px, 4.2vh, 52px); }
+    .large .faces {
+      flex-direction: row; flex-wrap: wrap; justify-content: center;
+      gap: clamp(8px, 1.2vh, 14px) clamp(10px, 1.4vw, 20px);
+      min-width: 0; max-width: 100%;
+    }
+    .large .face { min-width: 0; max-width: 100%; }
+    .large .face.more { font-size: clamp(14px, 2vh, 22px); }
   `],
 })
 export class PodiumComponent {

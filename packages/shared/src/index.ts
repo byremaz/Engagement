@@ -3,6 +3,7 @@
  * shared by the NestJS API (apps/api) and the Angular web app (apps/web).
  */
 export * from './types';
+export * from './avatars';
 export * from './life';
 export * from './scoring';
 export * from './timing';

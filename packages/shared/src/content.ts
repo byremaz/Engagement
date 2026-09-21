@@ -63,7 +63,7 @@ export const RLGL_PRACTICE: RaceContent = {
   autoRedMs: [1500, 2500],
   purpose: 'practice',
   ...raceDefaults,
-  redToleranceMs: 500, // forgiving while people learn the pad
+  redToleranceMs: 700, // forgiving while people learn the pad
 };
 
 export const RLGL_RACES: RaceContent[] = [
@@ -71,12 +71,15 @@ export const RLGL_RACES: RaceContent[] = [
     id: 'RACE-1',
     title: 'Warm-up Run',
     scene: 'Cartoon office corridor',
-    durationMs: RLGL_RACE_DURATION_MS,
+    // Owner request: the first (warm-up) race lasts exactly one minute.
+    // Still winnable: the 60 % green guarantee gives 36 s of green vs the
+    // 33.3 s of pure hold a finish needs (see RLGL_AUTO_MIN_GREEN_FRACTION).
+    durationMs: 60_000,
     autoGreenMs: [2500, 4500],
     autoRedMs: [1000, 2000],
     purpose: 'scored',
     ...raceDefaults,
-    redToleranceMs: 450,
+    redToleranceMs: 650,
   },
   {
     id: 'RACE-2',
@@ -89,7 +92,7 @@ export const RLGL_RACES: RaceContent[] = [
     autoFakeoutGreenMs: [600, 900],
     purpose: 'scored',
     ...raceDefaults,
-    redToleranceMs: 400,
+    redToleranceMs: 600,
   },
   {
     id: 'RACE-3',
@@ -102,7 +105,7 @@ export const RLGL_RACES: RaceContent[] = [
     autoFakeoutGreenMs: [600, 900],
     purpose: 'scored',
     ...raceDefaults,
-    redToleranceMs: 350,
+    redToleranceMs: 550,
   },
 ];
 

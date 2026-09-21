@@ -74,25 +74,33 @@ describe('Scoring v2 (plan §7): 80 achievement + 20 speed', () => {
     assert.equal(a.raw, b.raw);
   });
 
-  it('geo: inside 80 + speed (manual lock only); outside 10 per 500 km; no pin 0', () => {
+  it('geo v2.1: inside 60 + up to 40 speed (manual lock only); outside caps at 60, 1 per 50 km; no pin 0', () => {
     const W = 25_000;
-    near(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 3_000, lockedManually: true, windowMs: W }).raw, 97.6);
-    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 10_000, lockedManually: true, windowMs: W }).raw, 92);
-    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 20_000, lockedManually: true, windowMs: W }).raw, 84);
-    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: null, lockedManually: false, windowMs: W }).raw, 80);
-    assert.equal(geoRoundScoreV2({ distanceKm: 100, inside: false, timeMs: 2_000, lockedManually: true, windowMs: W }).raw, 78);
-    assert.equal(geoRoundScoreV2({ distanceKm: 500, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 70);
-    assert.equal(geoRoundScoreV2({ distanceKm: 1_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 60);
-    assert.equal(geoRoundScoreV2({ distanceKm: 2_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 40);
-    assert.equal(geoRoundScoreV2({ distanceKm: 4_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
+    near(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 3_000, lockedManually: true, windowMs: W }).raw, 95.2);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 0, lockedManually: true, windowMs: W }).raw, 100);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 10_000, lockedManually: true, windowMs: W }).raw, 84);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 20_000, lockedManually: true, windowMs: W }).raw, 68);
+    assert.equal(geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: null, lockedManually: false, windowMs: W }).raw, 60);
+    near(geoRoundScoreV2({ distanceKm: 100, inside: false, timeMs: 2_000, lockedManually: true, windowMs: W }).raw, 58);
+    assert.equal(geoRoundScoreV2({ distanceKm: 500, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 50);
+    assert.equal(geoRoundScoreV2({ distanceKm: 1_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 40);
+    assert.equal(geoRoundScoreV2({ distanceKm: 2_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 20);
+    assert.equal(geoRoundScoreV2({ distanceKm: 3_000, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
     assert.equal(geoRoundScoreV2({ distanceKm: 4_500, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
     assert.equal(geoRoundScoreV2({ distanceKm: null, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw, 0);
-    // A slow inside pin always beats a fast pin 1 km outside.
-    assert.ok(80 > geoRoundScoreV2({ distanceKm: 1, inside: false, timeMs: 0, lockedManually: true, windowMs: W }).raw);
-    // Plan example: 5 inside (avg 8 s) + 2 at 600 km + 1 none → 755.
+    // Anyone inside — even without a manual lock — always beats the fastest pin 1 km outside.
+    const slowestInside = geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: null, lockedManually: false, windowMs: W }).raw;
+    assert.ok(slowestInside > geoRoundScoreV2({ distanceKm: 1, inside: false, timeMs: 0, lockedManually: true, windowMs: W }).raw);
+    // Among inside pins the FASTER lock always scores higher.
+    const fastInside = geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 4_000, lockedManually: true, windowMs: W }).raw;
+    const slowInside = geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 18_000, lockedManually: true, windowMs: W }).raw;
+    assert.ok(fastInside > slowInside && slowInside > slowestInside);
+    // Game example: 5 inside (8 s locks) + 2 at 600 km + 1 none → 665.
     const inside8 = geoRoundScoreV2({ distanceKm: 0, inside: true, timeMs: 8_000, lockedManually: true, windowMs: W }).raw;
     const out600 = geoRoundScoreV2({ distanceKm: 600, inside: false, timeMs: null, lockedManually: false, windowMs: W }).raw;
-    assert.equal(geoGameScore([inside8, inside8, inside8, inside8, inside8, out600, out600, 0]), 755);
+    near(inside8, 87.2); // 60 + 40·0.68
+    assert.equal(out600, 48); // 60 − 600/50
+    assert.equal(geoGameScore([inside8, inside8, inside8, inside8, inside8, out600, out600, 0]), 665);
   });
 
   it('order: 20 per position, perfect + manual lock adds speed; a fast half-right never beats a slow perfect', () => {

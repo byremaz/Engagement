@@ -80,6 +80,11 @@ export const EN = {
   'join.namePlaceholder': 'e.g. Sara',
   'join.submit': 'Join',
   'join.joining': 'Joining…',
+  'join.avatar.label': 'Pick your character',
+  'join.avatar.random': 'Random',
+  'play.avatar.change': 'Change character',
+  'play.avatar.pick': 'Pick your character',
+  'play.avatar.error': 'Could not change the character — try again.',
   'join.recoverLink': 'I already joined on another phone',
   'join.recoveryLabel': 'Recovery code',
   'join.recoverSubmit': 'Restore my place',
@@ -139,7 +144,7 @@ export const EN = {
   'play.podium': 'You finished #{rank} — on the podium! 🎉',
   'play.thanks': 'Thanks for playing',
   'play.scoring.note':
-    'Scoring: every round is worth 100 — up to 80 for doing it right and up to 20 for speed (speed counts only with a full success). Each game adds up to 1,000 points; 3,000 in total.',
+    'Scoring: every round is worth 100 — most of it for doing it right plus a speed bonus (in the map game speed matters most: inside the country = 60 + up to 40 for a fast lock). Each game adds up to 1,000 points; 3,000 in total.',
 
   // ------------------------------------------------------------ waiting card
   'wait.title.Lobby': 'Waiting in the lobby',
@@ -612,7 +617,7 @@ export const EN = {
   'howto.GEO.step1': 'Drag to rotate, pinch or scroll to zoom.',
   'howto.GEO.step2': 'Tap the globe to place your pin.',
   'howto.GEO.step3': 'Press Lock my pin before the timer ends.',
-  'howto.GEO.scoring': 'Inside the country = 80 + up to 20 for a fast lock. Outside: every 500 km costs 10 points.',
+  'howto.GEO.scoring': 'Inside the country = 60 + up to 40 for a fast lock — the faster you lock, the more you score. Outside: at most 60, minus 1 point per 50 km. Anyone inside always beats anyone outside.',
   'howto.ORDER.headline': 'Put the four cards in the requested order.',
   'howto.ORDER.step1': 'Read the direction: which end is first.',
   'howto.ORDER.step2': 'Drag a card, or use the arrow buttons.',

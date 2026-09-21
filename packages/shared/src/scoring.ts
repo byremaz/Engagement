@@ -63,11 +63,19 @@ export const RLGL_PRACTICE_DURATION_MS = 20_000;
  * eliminates" is unchanged, only its fairness (plan decision, 20 Sep 2026).
  */
 /**
- * Shared red tolerance. 400 ms sits just above human reaction (250-350 ms)
- * plus venue latency, so a lapse of attention really does cost the race; each
- * scored race overrides it (450 / 400 / 350 ms, content.ts).
+ * Shared red tolerance. The original 400 ms baseline plus a 200 ms forgiveness
+ * margin: covers human reaction (250-350 ms) plus venue latency, so only a
+ * real lapse of attention costs the race; each scored race overrides it
+ * (content.ts, each original value + 200 ms).
  */
-export const RLGL_RED_TOLERANCE_MS = 400;
+export const RLGL_RED_TOLERANCE_MS = 600;
+/**
+ * Forgiveness margin (v2.1): a mistaken NEW press on an established RED is no
+ * longer instantly fatal - the racer has this many ms to release the button
+ * (original 250 ms + 200 ms margin). Only a press that is still held when the
+ * window expires eliminates.
+ */
+export const RLGL_MISTAKE_GRACE_MS = 450;
 export const RLGL_HEARTBEAT_TIMEOUT_MS = 500;
 export const RLGL_SCORED_RACES = 3;
 /** Finishes within the same 0.1 s bucket share a rank (§6.8). */
@@ -223,9 +231,16 @@ export function geoGameScore(rawRoundScores: number[], plannedRounds = GEO_ROUND
   return ROUND_HALF_UP((GAME_MAX * sum(rawRoundScores)) / denominator);
 }
 
-/** v2: outside the country costs 10 points per 500 km from a base of 80 (0 at 4000 km). */
+/**
+ * v2.1 geo split: inside the country the race is about SPEED — 60 base + up
+ * to 40 speed — while outside caps at the base (60) with no speed at all, so
+ * anyone inside always outranks everyone outside (plan, 21 Sep 2026).
+ */
+export const GEO_BASE_MAX = 60;
+export const GEO_SPEED_MAX = 40;
+/** v2: outside the country costs 1 point per 50 km from the base (0 at 3000 km). */
 export const GEO_KM_PER_POINT = 50;
-export const GEO_ZERO_DISTANCE_KM_V2 = BASE_MAX * GEO_KM_PER_POINT;
+export const GEO_ZERO_DISTANCE_KM_V2 = GEO_BASE_MAX * GEO_KM_PER_POINT;
 
 export interface GeoScoreInput {
   /** null = no pin. 0 when inside or on the boundary. */
@@ -239,19 +254,26 @@ export interface GeoScoreInput {
 }
 
 /**
- * v2 geo scoring (plan §7.3):
- *  inside  → 80 + speed (speed only with a manual lock)
- *  outside → max(0, 80 − d / 50)   (no speed bonus)
+ * v2.1 geo scoring (plan, 21 Sep 2026):
+ *  inside  → 60 + up to 40 speed (speed only with a manual lock — being inside
+ *            is enough for the base; the FAST pin wins the round)
+ *  outside → max(0, 60 − d / 50)   (never beats anyone inside; no speed bonus)
  *  no pin  → 0
  */
 export function geoRoundScoreV2(input: GeoScoreInput): RoundScoreParts {
   if (input.distanceKm === null || !Number.isFinite(input.distanceKm)) return { raw: 0, base: 0, speed: 0 };
   if (input.inside || input.distanceKm <= 0) {
-    const speed = input.lockedManually ? speedBonus(input.timeMs, input.windowMs) : 0;
-    return { raw: BASE_MAX + speed, base: BASE_MAX, speed };
+    const speed = input.lockedManually ? geoSpeedBonus(input.timeMs, input.windowMs) : 0;
+    return { raw: GEO_BASE_MAX + speed, base: GEO_BASE_MAX, speed };
   }
-  const base = Math.max(0, BASE_MAX - Math.max(0, input.distanceKm) / GEO_KM_PER_POINT);
+  const base = Math.max(0, GEO_BASE_MAX - Math.max(0, input.distanceKm) / GEO_KM_PER_POINT);
   return { raw: base, base, speed: 0 };
+}
+
+/** Geo speed bonus (0-40): linear from 40 at t=0 to 0 at t=windowMs, 100 ms buckets. */
+export function geoSpeedBonus(timeMs: number | null, windowMs: number): number {
+  if (timeMs === null || !Number.isFinite(timeMs) || windowMs <= 0) return 0;
+  return GEO_SPEED_MAX * Math.max(0, 1 - bucketMs(timeMs) / windowMs);
 }
 
 /** Phone label, e.g. "Inside the country: 100/100" or "640 km away: 87/100" (§7.4). */

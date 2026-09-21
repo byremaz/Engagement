@@ -15,6 +15,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import type { Lang } from '@asas/shared';
+import { AVATARS } from '@asas/shared';
 import { ApiService, PublicSession } from '../core/api.service';
 import { loadIdentity, saveIdentity, clearIdentity, loadLang } from '../core/storage';
 import { LocaleService } from '../i18n/locale.service';
@@ -99,6 +100,20 @@ import { TranslatePipe } from '../i18n/t.pipe';
           <input id="name" class="input" [(ngModel)]="name" autocomplete="nickname" maxlength="24"
             [attr.placeholder]="'join.namePlaceholder' | t" />
         </div>
+        <div>
+          <span class="small" style="font-weight:600">{{ 'join.avatar.label' | t }}</span>
+          <div class="avatar-grid" role="radiogroup" [attr.aria-label]="'join.avatar.label' | t">
+            <button type="button" class="avatar-cell" [class.on]="avatar() === null" role="radio"
+              [attr.aria-checked]="avatar() === null" (click)="avatar.set(null)">
+              <span aria-hidden="true">🎲</span>
+              <span class="avatar-cell-label">{{ 'join.avatar.random' | t }}</span>
+            </button>
+            @for (a of avatars; track a) {
+              <button type="button" class="avatar-cell" [class.on]="avatar() === a" role="radio"
+                [attr.aria-checked]="avatar() === a" (click)="avatar.set(a)">{{ a }}</button>
+            }
+          </div>
+        </div>
         @if (error(); as e) { <div class="alert alert-error" role="alert">{{ e }}</div> }
         <button class="btn btn-primary btn-lg btn-block" [disabled]="busy() || !canJoin()" (click)="join()">
           {{ (busy() ? 'join.joining' : 'join.submit') | t }}
@@ -150,6 +165,22 @@ import { TranslatePipe } from '../i18n/t.pipe';
       outline: var(--focus-ring-width) solid var(--focus-ring-color);
       outline-offset: var(--focus-ring-offset);
     }
+    /* Avatar picker: 16 characters + "random", touch-sized cells. */
+    .avatar-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+      gap: var(--space-1); margin-top: var(--space-1);
+    }
+    .avatar-cell {
+      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 52px; padding: 4px; font-size: 26px; cursor: pointer; font-family: inherit;
+      background: var(--elm-pale-blue); border: 2px solid transparent; border-radius: var(--radius-md, 12px);
+    }
+    .avatar-cell.on { border-color: var(--elm-navy); background: var(--elm-peach); }
+    .avatar-cell:focus-visible {
+      outline: var(--focus-ring-width) solid var(--focus-ring-color);
+      outline-offset: var(--focus-ring-offset);
+    }
+    .avatar-cell-label { font-size: 11px; font-weight: 600; color: var(--elm-muted-indigo); }
   `],
 })
 export class JoinComponent implements OnInit {
@@ -167,6 +198,10 @@ export class JoinComponent implements OnInit {
   readonly error = signal<string | null>(null);
   readonly busy = signal(false);
   readonly existing = signal(loadIdentity());
+  /** The shared allow-list — same source the server validates against. */
+  readonly avatars = AVATARS;
+  /** null = let the server assign one (the "random" default). */
+  readonly avatar = signal<string | null>(null);
 
   /**
    * Set after a successful join/restore so the player can confirm the identity
@@ -219,7 +254,7 @@ export class JoinComponent implements OnInit {
     if (!this.canJoin()) return;
     this.busy.set(true); this.error.set(null);
     try {
-      const r = await this.api.join(this.code, this.name.trim());
+      const r = await this.api.join(this.code, this.name.trim(), this.avatar() ?? undefined);
       const s = this.session() ?? (await this.api.preview(this.code)).session;
       saveIdentity({
         joinCode: this.code, sessionId: s.id, participantId: r.participant.id, token: r.token,
